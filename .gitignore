@@ -50,3 +50,7 @@ BACKEND_STRATEGY.md
 
 # claude skills 
 .claude/skills
+
+# test output
+coverage/
+tests/e2e/artifacts/

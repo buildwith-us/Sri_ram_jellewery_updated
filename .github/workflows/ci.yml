@@ -2,17 +2,15 @@ name: CI
 
 on:
   pull_request:
-    branches: [dev]
+    branches: [main, dev]
   push:
-    branches: [dev]
+    branches: [main, dev]
 
 jobs:
   ci:
     runs-on: ubuntu-latest
 
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/jewellery_db?schema=public
-      JWT_SECRET: dummy_ci_secret_32_chars_long_123456
       NODE_ENV: test
 
     steps:
@@ -22,14 +20,30 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
+
+      # mongodb-memory-server downloads a mongod binary on first use.
+      - name: Cache mongod binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests (if present)
-        run: npm test --if-present
+      # Unit + API + known-bug suites against MongoMemoryServer. No database
+      # service and no secrets: tests/setup/testEnv.js pins every variable.
+      - name: Test
+        run: npm run test:coverage
 
       - name: Build
         run: npm run build
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
