@@ -5,7 +5,7 @@ import { Product } from "../models/Product.js";
 import { computePrice } from "../utils/computePrice.js";
 import { verifyJWT } from "../middleware/auth.js";
 import { sendOrderAlert, sendRefundRequiredAlert } from "../utils/whatsapp.js";
-import { getRates, getRateStatus, findStaleMetalsForProducts } from "../utils/getRates.js";
+import { getRateStatus, findUnpriceableMetalsForProducts, rateUnavailableMessage } from "../utils/getRates.js";
 import { reserveStock, releaseStock, outOfStockMessage } from "../utils/stock.js";
 import { validate, createPaymentOrderSchema } from "../middleware/validate.js";
 import dotenv from "dotenv";
@@ -34,8 +34,6 @@ const getRazorpay = () => {
   return razorpayInstance;
 };
 
-// Use shared getRates from utils
-
 // POST /api/payment/create-order — create a Razorpay order with server-verified price
 router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), async (req, res) => {
   try {
@@ -53,30 +51,27 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
     }
 
 
-    // A stale metal rate produces a confident, wrong price — exactly how a
-    // ₹96/gram gold rate reached checkout. Refuse rather than charge against it.
-    const { staleMetals } = await getRateStatus();
-    if (staleMetals.length) {
-      const affected = findStaleMetalsForProducts(
-        await Product.find({
-          $or: items.map((i) => ({
-            $or: [
-              { _id: i.productId?.match(/^[0-9a-fA-F]{24}$/) ? i.productId : null },
-              { productId: i.productId },
-            ].filter(Boolean),
-          })).flat(),
-        }).lean(),
-        staleMetals
-      );
-      if (affected.length) {
-        return res.status(503).json({
-          error: `Our ${affected.join(" and ")} rate is being updated, so these items cannot be priced right now. Please try again shortly.`,
-        });
-      }
+    // Refuse rather than price against a rate that cannot be trusted: a stale
+    // one yields a confident, wrong number (how ₹96/gram gold reached
+    // checkout), and a missing one leaves nothing to price from at all.
+    const { rateMap, staleMetals } = await getRateStatus();
+    const affected = findUnpriceableMetalsForProducts(
+      await Product.find({
+        $or: items.map((i) => ({
+          $or: [
+            { _id: i.productId?.match(/^[0-9a-fA-F]{24}$/) ? i.productId : null },
+            { productId: i.productId },
+          ].filter(Boolean),
+        })).flat(),
+      }).lean(),
+      { rateMap, staleMetals }
+    );
+    if (affected.length) {
+      return res.status(503).json({ error: rateUnavailableMessage(affected) });
     }
 
     // Server-side price verification
-    const rateMap = await getRates();
+    // — priced from the same rates just checked.
     let totalAmount = 0;
     let gstAmount = 0;
     const verifiedItems = [];
@@ -98,7 +93,18 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
       }
 
       const priceData = computePrice(product, rateMap);
-      const serverPrice = priceData ? priceData.finalPrice : (product.price || 0);
+      // Never fall back to the stored `price` for a weighted product: that field
+      // is the making charge, not the customer price. The rate check above
+      // makes this unreachable; it stays as the last line of defence.
+      if (!priceData && product.weight) {
+        return res.status(503).json({ error: rateUnavailableMessage([product.metalType || "gold"]) });
+      }
+      // A weightless product sells at its stored price. Without one there is
+      // nothing to charge — this used to reach the database as NaN and 500.
+      const serverPrice = priceData?.finalPrice;
+      if (!Number.isFinite(serverPrice)) {
+        return res.status(400).json({ error: `${product.name} cannot be ordered right now — it has no price set.` });
+      }
       const quantity = item.quantity || 1;
       totalAmount += serverPrice * quantity;
 

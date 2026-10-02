@@ -33,20 +33,38 @@ export const getRateStatus = async () => {
 };
 
 /**
- * Which metals in a basket cannot currently be priced. A stale rate is worse
- * than no rate: it yields a confident, wrong number that the customer is then
- * charged. Refusing is the safe failure.
+ * Which metals in a basket cannot be priced right now: the rate is stale, or
+ * there is no usable rate for that metal at all.
  *
- * Products with no weight are priced from a stored figure rather than the live
- * rate, so they are unaffected.
+ * A stale rate yields a confident, wrong number that the customer is then
+ * charged. A missing rate is worse: computePrice has nothing to price from,
+ * and the checkout routes used to fall back to the stored `price` — the
+ * making charge — so a 50 g silver anklet sold for ₹250. Refusing is the safe
+ * failure in both cases.
+ *
+ * Quote-only and weightless products are not priced from the rate, so they
+ * are never affected.
+ *
+ * @param {Object[]} products
+ * @param {{ rateMap: Object|null, staleMetals: string[] }} status
+ *   Pass rateMap null to check staleness only.
+ * @returns {string[]} affected metals
  */
-export const findStaleMetalsForProducts = (products, staleMetals) => {
-  if (!staleMetals.length) return [];
+export const findUnpriceableMetalsForProducts = (products, { rateMap, staleMetals }) => {
   const affected = new Set();
   for (const product of products) {
     if (!product || product.isQuoteOnly || !product.weight) continue;
     const metal = product.metalType || "gold";
-    if (staleMetals.includes(metal)) affected.add(metal);
+    const missing = rateMap && !(rateMap[metal] > 0);
+    if (missing || staleMetals.includes(metal)) affected.add(metal);
   }
   return [...affected];
 };
+
+/** Staleness only — kept for existing callers. */
+export const findStaleMetalsForProducts = (products, staleMetals) =>
+  findUnpriceableMetalsForProducts(products, { rateMap: null, staleMetals });
+
+/** The 503 both checkout routes return when a metal cannot be priced. */
+export const rateUnavailableMessage = (metals) =>
+  `Our ${metals.join(" and ")} rate is being updated, so these items cannot be priced right now. Please try again shortly.`;

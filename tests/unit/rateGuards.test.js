@@ -7,7 +7,7 @@ import {
   rateOutOfBoundsMessage,
 } from "../../server/utils/rateGuards.js";
 import { updateRatesSchema } from "../../server/middleware/validate.js";
-import { findStaleMetalsForProducts } from "../../server/utils/getRates.js";
+import { findStaleMetalsForProducts, findUnpriceableMetalsForProducts } from "../../server/utils/getRates.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date("2026-09-27T12:00:00.000Z").getTime();
@@ -157,5 +157,35 @@ describe("findStaleMetalsForProducts", () => {
 
   it("nothing stale → nothing affected", () => {
     expect(findStaleMetalsForProducts([gold, silver], [])).toEqual([]);
+  });
+});
+
+describe("findUnpriceableMetalsForProducts (B3)", () => {
+  const gold = { weight: 5, metalType: "gold" };
+  const silver = { weight: 5, metalType: "silver" };
+  const both = { gold: 7000, silver: 90 };
+
+  it("a metal with no rate, or a zero rate, is unpriceable", () => {
+    expect(findUnpriceableMetalsForProducts([gold, silver], { rateMap: { gold: 7000 }, staleMetals: [] })).toEqual(["silver"]);
+    expect(findUnpriceableMetalsForProducts([gold], { rateMap: { gold: 0 }, staleMetals: [] })).toEqual(["gold"]);
+    expect(findUnpriceableMetalsForProducts([gold], { rateMap: {}, staleMetals: [] })).toEqual(["gold"]);
+  });
+
+  it("stale and missing are reported together", () => {
+    const r = findUnpriceableMetalsForProducts([gold, silver], { rateMap: { gold: 7000 }, staleMetals: ["gold"] });
+    expect(r.sort()).toEqual(["gold", "silver"]);
+  });
+
+  it("quote-only and weightless products never need a rate", () => {
+    const products = [{ weight: 0, metalType: "silver" }, { weight: 5, metalType: "silver", isQuoteOnly: true }];
+    expect(findUnpriceableMetalsForProducts(products, { rateMap: {}, staleMetals: [] })).toEqual([]);
+  });
+
+  it("all rates present and fresh → nothing affected", () => {
+    expect(findUnpriceableMetalsForProducts([gold, silver], { rateMap: both, staleMetals: [] })).toEqual([]);
+  });
+
+  it("rateMap null checks staleness only (findStaleMetalsForProducts)", () => {
+    expect(findUnpriceableMetalsForProducts([gold], { rateMap: null, staleMetals: [] })).toEqual([]);
   });
 });

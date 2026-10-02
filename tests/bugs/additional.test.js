@@ -138,37 +138,88 @@ describe("B2 · the discount the product page shows is not what checkout charges
 
 // ─── B3 ──────────────────────────────────────────────────────────────────────
 
-describe("B3 · a metal with NO rate document falls back to the stored price", () => {
-  bug("B3a: POST /api/orders refuses a product whose metal has no rate", async () => {
+describe("B3 · a metal with NO rate document fell back to the stored price (fixed)", () => {
+  const STALE_SHAPE = (metal) =>
+    `Our ${metal} rate is being updated, so these items cannot be priced right now. Please try again shortly.`;
+  const order = (token, items) => ctx.api(token).post("/api/orders").send({ items, paymentMethod: "cod" });
+
+  it("B3a: POST /api/orders refuses a product whose metal has no rate", async () => {
     await seedRates({ silver: null });
     await createProduct("silver");
     const c = await makeCustomer();
-    const res = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "silver-anklet" }], paymentMethod: "cod" });
+    const res = await order(c.token, [{ productId: "silver-anklet" }]);
     expect(res.status).toBe(503);
   });
 
-  it("B3a (impact): the 50 g silver anklet is sold for its ₹250 making charge", async () => {
+  it("B3a: the 503 has the stale-rate shape, names the metal, and nothing is sold for the ₹250 making charge", async () => {
     await seedRates({ silver: null });
     await createProduct("silver");
     const c = await makeCustomer();
-    const res = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "silver-anklet" }], paymentMethod: "cod" });
-    expect(res.body.data.totalAmount).toBe(250);
+    const res = await order(c.token, [{ productId: "silver-anklet" }]);
+    expect(res.body).toEqual({ error: STALE_SHAPE("silver") });
+    expect(await Order.countDocuments()).toBe(0);
+    expect(await stockOf("silver-anklet")).toBe(5);
   });
 
-  bug("B3b: /api/payment/create-order refuses it too", async () => {
+  it("B3b: /api/payment/create-order refuses it too, before Razorpay", async () => {
     await seedRates({ silver: null });
     await createProduct("silver");
     const c = await makeCustomer();
     const res = await createPayment(c.token, { items: [{ productId: "silver-anklet" }] });
     expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: STALE_SHAPE("silver") });
+    expect(mocks().razorpayCreate).not.toHaveBeenCalled();
+    expect(await stockOf("silver-anklet")).toBe(5);
   });
 
-  bug("B3c: a weight-0 product with no stored price is a 4xx, not a 500", async () => {
+  it("B3: a rate stored as 0 counts as missing", async () => {
+    await seedRates({ gold: 0 });
+    await createProduct("gold");
+    const c = await makeCustomer();
+    expect((await order(c.token, [{ productId: "gold-ring" }])).body).toEqual({ error: STALE_SHAPE("gold") });
+  });
+
+  it("B3: only the metal without a rate is refused — silver still sells when gold is missing", async () => {
+    await seedRates({ gold: null });
+    await createProduct("gold");
+    await createProduct("silver");
+    const c = await makeCustomer();
+    expect((await order(c.token, [{ productId: "silver-anklet" }])).body.data.totalAmount).toBe(5099);
+    expect((await order(c.token, [{ productId: "gold-ring" }])).status).toBe(503);
+  });
+
+  it("B3 (kept): weight-0 still sells at its stored price with no rates at all", async () => {
+    await createProduct("weightless");
+    const c = await makeCustomer();
+    expect((await order(c.token, [{ productId: "gift-box" }])).body.data.totalAmount).toBe(1500);
+  });
+
+  it("B3 (kept): quote-only is still a 400, even when its metal has no rate", async () => {
+    await createProduct("quote");
+    const c = await makeCustomer();
+    const res = await order(c.token, [{ productId: "diamond-set" }]);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Quote-only/);
+  });
+
+  it("B3 (kept): isFixedPrice is still ignored — a missing rate refuses either way", async () => {
+    await seedRates({ silver: null });
+    await createProduct("silver", { isFixedPrice: true });
+    const c = await makeCustomer();
+    expect((await order(c.token, [{ productId: "silver-anklet" }])).status).toBe(503);
+  });
+
+  it("B3c: a weight-0 product with no stored price is a 400 with a clear message, not a 500", async () => {
     await seedRates();
     await createProduct("weightless", { price: undefined });
     const c = await makeCustomer();
-    const res = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gift-box" }], paymentMethod: "cod" });
-    expect(res.status).toBeLessThan(500);
+    const cod = await order(c.token, [{ productId: "gift-box" }]);
+    const card = await createPayment(c.token, { items: [{ productId: "gift-box" }] });
+    for (const res of [cod, card]) {
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("Gift Box cannot be ordered right now — it has no price set.");
+    }
+    expect(await stockOf("gift-box")).toBe(5);
   });
 });
 
