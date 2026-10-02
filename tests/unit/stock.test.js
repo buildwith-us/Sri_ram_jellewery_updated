@@ -73,6 +73,26 @@ describe("reserveStock", () => {
     expect(await stockOf("one-of-a-kind")).toBe(0);
   });
 
+  it.each([[-2], [0], [0.5], [NaN], [Infinity], ["2"]])(
+    "B1 guard: quantity %j throws before any stock is touched",
+    async (quantity) => {
+      await createProduct("gold");
+      await createProduct("silver");
+      // The bad line comes second: nothing may be taken for the first line either.
+      await expect(
+        reserveStock([{ productId: "gold-ring", quantity: 1 }, { productId: "silver-anklet", quantity }])
+      ).rejects.toThrow(TypeError);
+      expect(await stockOf("gold-ring")).toBe(5);
+      expect(await stockOf("silver-anklet")).toBe(5);
+    }
+  );
+
+  it("B1 guard: a missing or null quantity still means one piece", async () => {
+    await createProduct("gold");
+    await reserveStock([{ productId: "gold-ring", quantity: null }, { productId: "gold-ring" }]);
+    expect(await stockOf("gold-ring")).toBe(3);
+  });
+
   it("a stock-0 product cannot be reserved", async () => {
     await createProduct("gold", { stock: 0 });
     const r = await reserveStock([{ productId: "gold-ring", quantity: 1 }]);

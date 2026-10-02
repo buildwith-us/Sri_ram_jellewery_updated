@@ -44,37 +44,66 @@ const createPayment = (token, body) => ctx.api(token).post("/api/payment/create-
 
 // ─── B1 ──────────────────────────────────────────────────────────────────────
 
-describe("B1 · /api/payment/create-order does not validate items or quantity", () => {
-  bug("B1a: a negative quantity is refused", async () => {
+describe("B1 · /api/payment/create-order did not validate items or quantity (fixed)", () => {
+  it("B1a: a negative quantity is refused", async () => {
     await seedCatalog();
     const c = await makeCustomer();
     const res = await createPayment(c.token, { items: [{ productId: "gold-ring", quantity: 1 }, { productId: "silver-anklet", quantity: -2 }] });
     expect(res.status).toBe(400);
   });
 
-  it("B1a (impact): a negative line lowers the amount charged AND adds phantom stock", async () => {
+  it("B1a: a negative line charges nothing, reserves nothing, adds no stock, never reaches Razorpay", async () => {
     await seedCatalog();
     const c = await makeCustomer();
     const res = await createPayment(c.token, { items: [{ productId: "gold-ring", quantity: 1 }, { productId: "silver-anklet", quantity: -2 }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/at least 1/);
+    expect(await stockOf("silver-anklet")).toBe(5);
+    expect(await stockOf("gold-ring")).toBe(5);
+    expect(mocks().razorpayCreate).not.toHaveBeenCalled();
+    expect(await Order.countDocuments()).toBe(0);
+  });
+
+  it("B1b: a fractional quantity is refused", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const res = await createPayment(c.token, { items: [{ productId: "gold-ring", quantity: 0.01 }] });
+    expect(res.status).toBe(400);
+  });
+
+  it("B1b: quantity 0.01 no longer buys the ring for 1% of its price", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const res = await createPayment(c.token, { items: [{ productId: "gold-ring", quantity: 0.01 }] });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/whole number/);
+    expect(await stockOf("gold-ring")).toBe(5);
+    expect(mocks().razorpayCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([[0], [100], ["abc"], [null], [1.5]])("B1: quantity %j → 400 on the card route", async (quantity) => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const res = await createPayment(c.token, { items: [{ productId: "gold-ring", quantity }] });
+    expect(res.status).toBe(400);
+    expect(mocks().razorpayCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([[1], [99], ["2"]])("B1: quantity %j is accepted on the card route and charged per piece", async (quantity) => {
+    await seedRates();
+    await createProduct("gold", { stock: 200 });
+    const c = await makeCustomer();
+    const res = await createPayment(c.token, { items: [{ productId: "gold-ring", quantity }] });
     expect(res.status).toBe(200);
-    expect(res.body.amount).toBe(80752 - 2 * 5099); // ₹70,554 for an ₹80,752 ring
-    expect(await stockOf("silver-anklet")).toBe(7); // was 5
-    expect(await stockOf("gold-ring")).toBe(4);
+    expect(res.body.amount).toBe(80752 * Number(quantity));
   });
 
-  bug("B1b: a fractional quantity is refused", async () => {
+  it("B1: the COD route shares the same line rules (100 → 400)", async () => {
     await seedCatalog();
     const c = await makeCustomer();
-    const res = await createPayment(c.token, { items: [{ productId: "gold-ring", quantity: 0.01 }] });
+    const res = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring", quantity: 100 }], paymentMethod: "cod" });
     expect(res.status).toBe(400);
-  });
-
-  it("B1b (impact): quantity 0.01 buys the ring for 1% of its price", async () => {
-    await seedCatalog();
-    const c = await makeCustomer();
-    const res = await createPayment(c.token, { items: [{ productId: "gold-ring", quantity: 0.01 }] });
-    expect(res.body.amount).toBe(808);
-    expect(await stockOf("gold-ring")).toBeCloseTo(4.99, 5);
+    expect(res.body.error).toMatch(/cannot exceed 99/);
   });
 
   it("B1c (ok): an item without productId is refused", async () => {

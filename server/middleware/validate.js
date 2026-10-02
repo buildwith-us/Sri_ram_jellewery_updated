@@ -130,17 +130,42 @@ const cashOnDeliveryOnly = z.preprocess(
   })
 );
 
-export const createOrderSchema = z.object({
-  items: z.array(z.object({
-    productId: requiredString("Product ID is required"),
-    quantity: z.coerce.number().int().positive("Quantity must be at least 1").optional(),
-  }).passthrough()).min(1, "At least one item required"),
+// What a checkout line is, defined once for both checkout routes — COD
+// (POST /api/orders) and card/UPI (POST /api/payment/create-order) — so they
+// cannot disagree. The card route used to accept anything: a quantity of -2
+// cut the amount charged and added stock, and 0.01 bought a piece for 1% of
+// its price. Bounds match the cart's (1–99, whole pieces).
+const checkoutLines = z
+  .array(
+    z.object({
+      productId: requiredString("Product ID is required"),
+      quantity: z.coerce
+        .number({ error: "Quantity must be a whole number" })
+        .int("Quantity must be a whole number")
+        .min(1, "Quantity must be at least 1")
+        .max(99, "Quantity cannot exceed 99")
+        .optional(),
+    }).passthrough(),
+    { error: "At least one item required" }
+  )
+  .min(1, "At least one item required");
+
+const checkoutFields = {
+  items: checkoutLines,
   shippingAddress: z.object({}).passthrough().nullish(),
   name: z.string().optional(),
+  buyNow: z.coerce.boolean().optional(),
+};
+
+export const createOrderSchema = z.object({
+  ...checkoutFields,
   // Optional for backward compatibility: an omitted method has always meant COD.
   paymentMethod: cashOnDeliveryOnly.optional(),
-  buyNow: z.coerce.boolean().optional(),
 }).passthrough();
+
+// The same lines and fields. No paymentMethod: this route only ever creates
+// Razorpay orders, so the COD-only rule above does not apply to it.
+export const createPaymentOrderSchema = z.object(checkoutFields).passthrough();
 
 export const orderStatusSchema = z.object({
   status: z.enum(

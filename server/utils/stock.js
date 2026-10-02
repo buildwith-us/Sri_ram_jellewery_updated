@@ -58,14 +58,30 @@ const productFilter = (productId) => ({
  * update matches no document. If any line fails, lines already taken are put
  * back before returning, so a partial reservation is never left behind.
  *
+ * Every quantity must be a whole number of pieces, at least one (a missing
+ * quantity means one). Anything else throws before any stock is touched: a
+ * negative `$inc` adds stock and a fractional one sells part of a piece. The
+ * checkout schemas already refuse such input; this keeps a future caller that
+ * skips them from reintroducing B1.
+ *
  * @param {Array<{productId: string, quantity: number, name?: string}>} items
  * @returns {Promise<{ok: true} | {ok: false, product: string, available: number}>}
+ * @throws {TypeError} when a line's quantity is not a positive integer
  */
 export const reserveStock = async (items) => {
+  for (const item of items) {
+    const quantity = item.quantity ?? 1;
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      throw new TypeError(
+        `reserveStock: quantity must be a positive integer, got ${JSON.stringify(item.quantity)} for ${item.productId}`
+      );
+    }
+  }
+
   const taken = [];
 
   for (const item of items) {
-    const quantity = item.quantity || 1;
+    const quantity = item.quantity ?? 1;
 
     const updated = await Product.findOneAndUpdate(
       { ...productFilter(item.productId), stock: { $gte: quantity } },

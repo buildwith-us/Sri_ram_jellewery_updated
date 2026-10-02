@@ -7,6 +7,7 @@ import { verifyJWT } from "../middleware/auth.js";
 import { sendOrderAlert, sendRefundRequiredAlert } from "../utils/whatsapp.js";
 import { getRates, getRateStatus, findStaleMetalsForProducts } from "../utils/getRates.js";
 import { reserveStock, releaseStock, outOfStockMessage } from "../utils/stock.js";
+import { validate, createPaymentOrderSchema } from "../middleware/validate.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -36,7 +37,7 @@ const getRazorpay = () => {
 // Use shared getRates from utils
 
 // POST /api/payment/create-order — create a Razorpay order with server-verified price
-router.post("/create-order", verifyJWT, async (req, res) => {
+router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), async (req, res) => {
   try {
     const razorpay = getRazorpay();
     if (!razorpay) {
