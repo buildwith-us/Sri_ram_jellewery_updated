@@ -1,8 +1,30 @@
+import http from "node:http";
 import mongoose from "mongoose";
 import request from "supertest";
 import { inject, beforeAll, beforeEach, afterAll } from "vitest";
 
 let appPromise = null;
+let server = null;
+
+/**
+ * One server per test file, bound to 127.0.0.1 explicitly.
+ *
+ * supertest's default — `request(app)` — listens on port 0 of `::` for every
+ * request and then connects to 127.0.0.1. On macOS a `::` listener can share a
+ * port number with another process's 127.0.0.1 listener, and the IPv4
+ * connection then reaches THAT process: VS Code helpers (a stray 401) or a
+ * mongod (a hang until the 30 s timeout). With thousands of requests per run
+ * this produced roughly one unrelated failure every other run. Binding the
+ * IPv4 address ourselves lets the kernel see the conflict and pick a free port.
+ */
+const listen = async (app) => {
+  server = http.createServer(app);
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return server;
+};
 
 /**
  * Connect this test file to its own database on the shared in-memory mongod,
@@ -49,9 +71,9 @@ export const nextIp = () => {
  * `api(token?)` returns get/post/patch/delete builders with the test's client
  * IP and, optionally, a bearer token already attached.
  */
-export const makeClient = (app, ipRef) => (token, { ip } = {}) => {
+export const makeClient = (target, ipRef) => (token, { ip } = {}) => {
   const wrap = (method) => (url) => {
-    let t = request(app)[method](url).set("X-Forwarded-For", ip || ipRef.current);
+    let t = request(target)[method](url).set("X-Forwarded-For", ip || ipRef.current);
     if (token) t = t.set("Authorization", `Bearer ${token}`);
     return t;
   };
@@ -68,7 +90,7 @@ export const useApp = () => {
 
   beforeAll(async () => {
     ctx.app = await startApp();
-    ctx.api = makeClient(ctx.app, ipRef);
+    ctx.api = makeClient(server ?? (await listen(ctx.app)), ipRef);
   });
 
   beforeEach(async () => {
@@ -77,6 +99,8 @@ export const useApp = () => {
   });
 
   afterAll(async () => {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    server = null;
     if (mongoose.connection.readyState === 1) {
       await mongoose.connection.dropDatabase();
       await mongoose.disconnect();
