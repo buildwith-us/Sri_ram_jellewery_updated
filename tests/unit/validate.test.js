@@ -85,8 +85,15 @@ describe("schemas", () => {
     expect(r.data.isQuoteOnly).toBe(true);
   });
 
-  it("product: negative weight and stock are accepted (see bug report)", () => {
-    expect(parse(S.createProductSchema, { name: "n", category: "c", weight: -5, stock: -3 }).success).toBe(true);
+  it("product: weight, price and stock cannot be negative; stock is whole (B4)", () => {
+    const ok = (extra) => parse(S.createProductSchema, { name: "n", category: "c", ...extra }).success;
+    expect(ok({ weight: -5 })).toBe(false);
+    expect(ok({ price: -1 })).toBe(false);
+    expect(ok({ stock: -3 })).toBe(false);
+    expect(ok({ stock: 1.5 })).toBe(false);
+    expect(ok({ weight: 0, price: 0, stock: 0 })).toBe(true);
+    expect(ok({ weight: null, price: null, stock: null })).toBe(true);
+    expect(parse(S.updateProductSchema, { weight: -1 }).success).toBe(false);
   });
 
   it("shipping address: 6-digit PIN, 10–15 char mobile, email required", () => {

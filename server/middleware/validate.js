@@ -68,13 +68,15 @@ export const createProductSchema = z.object({
   name: requiredString("Product name is required"),
   category: requiredString("Category is required"),
   metalType: z.enum(["gold", "silver"]).nullish(),
-  weight: optionalNumber,
+  // Never negative: a negative weight priced the piece below zero. 0 is valid
+  // and means "sell at the stored price".
+  weight: z.coerce.number().min(0, "Weight cannot be negative").nullish(),
   wastagePercent: optionalPercent,
   gstPercent: optionalPercent,
-  price: optionalNumber,
+  price: z.coerce.number().min(0, "Price cannot be negative").nullish(),
   discountPrice: optionalNumber,
   discountPercentage: optionalPercent,
-  stock: optionalNumber,
+  stock: z.coerce.number().int("Stock must be a whole number").min(0, "Stock cannot be negative").nullish(),
   carate: optionalNumber,
   isQuoteOnly: z.coerce.boolean().nullish(),
 }).passthrough();

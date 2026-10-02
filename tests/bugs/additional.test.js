@@ -225,14 +225,45 @@ describe("B3 · a metal with NO rate document fell back to the stored price (fix
 
 // ─── B4 ──────────────────────────────────────────────────────────────────────
 
-describe("B4 · products accept negative weight / stock / price", () => {
-  bug("B4: negative weight is refused at product creation", async () => {
-    const { token } = await makeAdmin();
-    const res = await ctx.api(token).post("/api/products").send({ name: "n", category: "Gold", weight: -5, stock: 1 });
+describe("B4 · products accepted negative weight / stock / price (fixed for new writes)", () => {
+  const create = async (body) =>
+    ctx.api((await makeAdmin()).token).post("/api/products").send({ name: "n", category: "Gold", ...body });
+
+  it("B4: negative weight is refused at product creation", async () => {
+    const res = await create({ weight: -5, stock: 1 });
     expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Weight cannot be negative");
   });
 
-  it("B4 (impact): a negative-weight product has a negative price and can be ordered", async () => {
+  it.each([
+    [{ stock: -1 }, "Stock cannot be negative"],
+    [{ stock: 2.5 }, "Stock must be a whole number"],
+    [{ price: -1 }, "Price cannot be negative"],
+    [{ weight: "-0.5" }, "Weight cannot be negative"],
+  ])("B4: create %j → 400", async (body, msg) => {
+    const res = await create(body);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe(msg);
+  });
+
+  it("B4: the same bounds apply to updates", async () => {
+    await createProduct("gold");
+    const { token } = await makeAdmin();
+    for (const body of [{ weight: -5 }, { stock: -1 }, { price: -10 }]) {
+      expect((await ctx.api(token).patch("/api/products/gold-ring").send(body)).status, JSON.stringify(body)).toBe(400);
+    }
+    expect((await ctx.api(token).get("/api/products/gold-ring")).body.data.weight).toBe(10);
+  });
+
+  it("B4 (kept): zero weight, zero stock and zero price are valid", async () => {
+    const res = await create({ weight: 0, stock: 0, price: 0 });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ weight: 0, stock: 0, price: 0 });
+  });
+
+  // Residual, NOT fixed by B4: the bounds guard API writes only. A product
+  // already stored with a negative weight still prices below zero.
+  it("B4 (residual): a negative weight already in the database still prices negative and can be ordered", async () => {
     await seedRates();
     await createProduct("gold", { weight: -5 });
     const c = await makeCustomer();
