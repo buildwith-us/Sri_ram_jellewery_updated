@@ -60,7 +60,8 @@ const OrderSchema = new mongoose.Schema({
   razorpayOrderId: { type: String },
   razorpayPaymentId: { type: String },
   paymentStatus: { type: String },
-  paymentMethod: { type: String },
+  // Normalised on every write, so "COD" and "cod" cannot be two methods.
+  paymentMethod: { type: String, lowercase: true, trim: true },
 
   // Stamped once, when a payment is first confirmed — by whichever of the
   // webhook or the browser's verify call arrives first. This is what makes that

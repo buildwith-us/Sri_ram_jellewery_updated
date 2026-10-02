@@ -132,7 +132,9 @@ export const releaseStaleReservations = async ({ windowMinutes, now = Date.now()
     stockReserved: true,
     paidAt: null,
     paymentStatus: "pending",
-    paymentMethod: { $ne: "cod" },
+    // Case-insensitive: orders written before paymentMethod was normalised can
+    // hold "COD" or " Cod ", and no spelling of cash on delivery is swept.
+    paymentMethod: { $not: /^\s*cod\s*$/i },
     createdAt: { $lt: cutoff },
   })
     .select("_id orderId items totalAmount createdAt")

@@ -56,10 +56,14 @@ describe("whatsapp.js (real module)", () => {
     expect(body.text.body).toMatch(/…and 2 more/);
   });
 
-  it("labels every non-'cod' method as 'Paid online'", async () => {
+  it("the payment line follows paidAt, never the chosen method (S2)", async () => {
     Object.assign(process.env, WA_ENV);
-    await wa.sendOrderAlert({ order, paymentMethod: "upi" });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).text.body).toMatch(/Payment: Paid online/);
+    await wa.sendOrderAlert({ order: { ...order, paymentMethod: "upi", paidAt: null } });
+    await wa.sendOrderAlert({ order: { ...order, paymentMethod: "razorpay", paidAt: new Date() } });
+    const [unpaid, paid] = fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).text.body);
+    expect(unpaid).not.toMatch(/Paid online/);
+    expect(unpaid).toMatch(/Payment: Cash on Delivery/);
+    expect(paid).toMatch(/Payment: Paid online/);
   });
 
   it("throws on a non-2xx response so callers' .catch sees it", async () => {

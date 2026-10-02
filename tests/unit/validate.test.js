@@ -44,10 +44,17 @@ describe("schemas", () => {
     expect(parse(S.createOrderSchema, { items: [{ productId: "p" }] }).success).toBe(true);
   });
 
-  it("createOrderSchema accepts ANY paymentMethod string (see bug report)", () => {
-    for (const m of ["cod", "COD", "razorpay", "upi", "free", ""]) {
-      expect(parse(S.createOrderSchema, { items: [{ productId: "p" }], paymentMethod: m }).success).toBe(true);
+  it("createOrderSchema accepts only cash on delivery, in any case (S2)", () => {
+    for (const m of ["cod", "COD", " Cod "]) {
+      const r = parse(S.createOrderSchema, { items: [{ productId: "p" }], paymentMethod: m });
+      expect(r.success).toBe(true);
+      expect(r.data.paymentMethod).toBe("cod");
     }
+    for (const m of ["razorpay", "upi", "free", "", 0, null]) {
+      expect(parse(S.createOrderSchema, { items: [{ productId: "p" }], paymentMethod: m }).success, String(m)).toBe(false);
+    }
+    // Omitted has always meant COD.
+    expect(parse(S.createOrderSchema, { items: [{ productId: "p" }] }).success).toBe(true);
   });
 
   it("order approval: REJECTED needs a non-blank reason", () => {

@@ -87,9 +87,14 @@ const formatAmount = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
  * after payment is confirmed, so abandoned checkout attempts raise nothing.
  *
  * Kept short deliberately — the owner reads this on a lock screen.
+ *
+ * The payment line comes from the order's own state (paidAt), never from the
+ * method the customer chose. A chosen method is an intention; paidAt is the
+ * fact. Reading the method is how an unpaid "upi" order reached the owner as
+ * "Paid online".
  */
-export const sendOrderAlert = async ({ order, paymentMethod }) => {
-  const method = paymentMethod === "cod" ? "Cash on Delivery" : "Paid online";
+export const sendOrderAlert = async ({ order }) => {
+  const method = order.paidAt ? "Paid online" : "Cash on Delivery";
   const customer = order.name || "Customer";
   const mobile =
     order.shippingAddress?.mobileNumber || order.shippingAddress?.number || order.phone || "—";

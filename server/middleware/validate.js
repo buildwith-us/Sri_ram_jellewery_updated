@@ -117,6 +117,19 @@ export const quoteStatusSchema = z.object({
   }),
 });
 
+// Cash on delivery is the only method POST /api/orders can honour: it is the
+// one order that is legitimately unpaid when placed. Card, UPI, QR and
+// netbanking all go through /api/payment/create-order, where Razorpay collects
+// the money first. Accepting any string here let "upi" create an unpaid order
+// that the customer saw as confirmed and the owner was told was paid.
+// Case and padding are normalised, so "COD" is cash on delivery too.
+const cashOnDeliveryOnly = z.preprocess(
+  (v) => (typeof v === "string" ? v.trim().toLowerCase() : v),
+  z.literal("cod", {
+    error: "Only Cash on Delivery orders can be placed here. Card and UPI payments go through secure checkout.",
+  })
+);
+
 export const createOrderSchema = z.object({
   items: z.array(z.object({
     productId: requiredString("Product ID is required"),
@@ -124,7 +137,8 @@ export const createOrderSchema = z.object({
   }).passthrough()).min(1, "At least one item required"),
   shippingAddress: z.object({}).passthrough().nullish(),
   name: z.string().optional(),
-  paymentMethod: z.string().optional(),
+  // Optional for backward compatibility: an omitted method has always meant COD.
+  paymentMethod: cashOnDeliveryOnly.optional(),
   buyNow: z.coerce.boolean().optional(),
 }).passthrough();
 

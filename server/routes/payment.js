@@ -218,7 +218,7 @@ const confirmPayment = async ({ razorpayOrderId, razorpayPaymentId, source }) =>
 
     console.log(`💰 Payment confirmed for ${order.orderId} via ${source}.`);
     // Only a confirmed payment is worth waking the owner for, and only once.
-    sendOrderAlert({ order, paymentMethod: "razorpay" }).catch((err) =>
+    sendOrderAlert({ order }).catch((err) =>
       console.error("Owner order alert failed (non-critical):", err.message)
     );
     return { order, alreadyConfirmed: false };
@@ -261,7 +261,7 @@ const reclaimForLatePayment = async ({ order, source }) => {
       `💰 Payment confirmed for ${order.orderId} via ${source} — arrived after expiry, ` +
         `stock was still available and has been re-reserved.`
     );
-    sendOrderAlert({ order: revived, paymentMethod: "razorpay" }).catch((err) =>
+    sendOrderAlert({ order: revived }).catch((err) =>
       console.error("Owner order alert failed (non-critical):", err.message)
     );
     return { order: revived, alreadyConfirmed: false, reclaimed: true };

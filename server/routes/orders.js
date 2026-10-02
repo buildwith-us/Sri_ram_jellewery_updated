@@ -70,7 +70,7 @@ router.get("/:id", verifyJWT, async (req, res) => {
 // POST /api/orders — create order with server-side price verification
 router.post("/", verifyJWT, validate(createOrderSchema), async (req, res) => {
   try {
-    const { items, shippingAddress, name, paymentMethod } = req.body;
+    const { items, shippingAddress, name } = req.body;
 
     if (!items || !items.length) {
       return res.status(400).json({ error: "Order must contain at least one item" });
@@ -162,8 +162,10 @@ router.post("/", verifyJWT, validate(createOrderSchema), async (req, res) => {
       totalAmount: Math.round(totalAmount),
       gstAmount: Math.round(gstAmount),
       shippingAddress,
-      paymentMethod: paymentMethod || "cod",
-      paymentStatus: paymentMethod === "cod" ? "unpaid" : "pending",
+      // createOrderSchema admits only cash on delivery, so this route never
+      // writes an online order — those exist only once Razorpay has one.
+      paymentMethod: "cod",
+      paymentStatus: "unpaid",
       orderStatus: "processing",
       stockReserved: true,
     });
@@ -180,7 +182,7 @@ router.post("/", verifyJWT, validate(createOrderSchema), async (req, res) => {
     // Owner alert, fire-and-forget. Card orders are announced from the payment
     // verification handler instead, so an abandoned checkout raises nothing.
     // A notification must never be the reason a saved order reports failure.
-    sendOrderAlert({ order: newOrder, paymentMethod: newOrder.paymentMethod }).catch((err) =>
+    sendOrderAlert({ order: newOrder }).catch((err) =>
       console.error("Owner order alert failed (non-critical):", err.message)
     );
 

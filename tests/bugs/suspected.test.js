@@ -110,7 +110,7 @@ describe("S1 · PATCH /api/users/:id passes req.body straight to findByIdAndUpda
 
 // ─── S2 ──────────────────────────────────────────────────────────────────────
 
-describe("S2 · POST /api/orders accepts any paymentMethod", () => {
+describe("S2 · POST /api/orders accepted any paymentMethod (fixed)", () => {
   const place = async (paymentMethod) => {
     await seedCatalog();
     const c = await makeCustomer();
@@ -123,48 +123,69 @@ describe("S2 · POST /api/orders accepts any paymentMethod", () => {
     return { c, res };
   };
 
-  bug.each(["razorpay", "upi", "free", "card"])(
-    "S2a: paymentMethod %s is refused — only COD may skip payment",
+  it.each(["razorpay", "upi", "free", "card", "cash", ""])(
+    "S2a: paymentMethod %j is refused — only COD may skip payment",
     async (m) => {
       const { res } = await place(m);
       expect(res.status).toBe(400);
     }
   );
 
-  it("S2a (impact, 'upi' — the Checkout page's UPI / QR SCAN option): unpaid order, owner told 'Paid online', cart cleared, then swept", async () => {
+  it("S2a: a refused 'upi' order (the Checkout page's UPI / QR SCAN option) writes nothing, alerts nobody, keeps the bag", async () => {
     const { c, res } = await place("upi");
-    expect(res.status).toBe(201);
-    const o = await Order.findById(res.body.data._id).lean();
-    expect(o).toMatchObject({ paymentMethod: "upi", paymentStatus: "pending", orderStatus: "processing", paidAt: null });
-    // Owner alert fired, and whatsapp.js labels every non-"cod" method "Paid online".
-    expect(mocks().whatsapp.sendOrderAlert).toHaveBeenCalledWith(expect.objectContaining({ paymentMethod: "upi" }));
-    expect(await Cart.countDocuments({ userId: String(c.user._id) })).toBe(0);
-    // 30 minutes later the cron expires it and restocks — the customer saw "Order placed".
-    await Order.updateOne({ _id: o._id }, { createdAt: hourAgo() });
-    const sweep = await releaseStaleReservations();
-    expect(sweep.released.map((r) => r.orderId)).toContain(o.orderId);
-    expect((await Order.findById(o._id).lean()).orderStatus).toBe("expired");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Cash on Delivery/);
+    expect(await Order.countDocuments()).toBe(0);
+    expect(await stockOf("gold-ring")).toBe(5);
+    expect(mocks().whatsapp.sendOrderAlert).not.toHaveBeenCalled();
+    expect(await Cart.countDocuments({ userId: String(c.user._id) })).toBe(1);
   });
 
-  bug("S2b: 'COD' (upper case) is treated as cash on delivery, never swept", async () => {
-    const { res } = await place("COD");
+  it.each(["COD", " Cod ", "cod"])("S2b: %j is cash on delivery — stored as 'cod', never swept", async (m) => {
+    const { res } = await place(m);
+    expect(res.status).toBe(201);
     const o = await Order.findById(res.body.data._id).lean();
+    expect(o.paymentMethod).toBe("cod");
     await Order.updateOne({ _id: o._id }, { createdAt: hourAgo() });
     const sweep = await releaseStaleReservations();
     expect(sweep.released).toHaveLength(0);
+    expect(await stockOf("gold-ring")).toBe(4);
   });
 
-  bug("S2c: omitted paymentMethod → stored as COD with paymentStatus 'unpaid' (not 'pending')", async () => {
+  it("S2b: a legacy order stored as 'COD' before normalisation is never swept", async () => {
+    await seedCatalog();
+    // Raw insert: bypasses the model's lowercase setter, as old documents did.
+    await Order.collection.insertOne({
+      orderId: "ORD-LEGACY-COD",
+      items: [{ productId: "gold-ring", quantity: 1 }],
+      totalAmount: 80752,
+      paymentMethod: "COD",
+      paymentStatus: "pending",
+      orderStatus: "processing",
+      stockReserved: true,
+      paidAt: null,
+      createdAt: hourAgo(),
+    });
+    expect((await releaseStaleReservations()).released).toHaveLength(0);
+    expect(await stockOf("gold-ring")).toBe(5);
+  });
+
+  it("S2c: omitted paymentMethod → stored as COD with paymentStatus 'unpaid' (not 'pending')", async () => {
     const { res } = await place(undefined);
     const o = await Order.findById(res.body.data._id).lean();
     expect(o.paymentMethod).toBe("cod");
     expect(o.paymentStatus).toBe("unpaid");
   });
 
+  // Not part of S2's fix: approval rules are Batch 2. The unpaid online order
+  // now comes from create-order, the only route that can still make one.
   bug("S2d: an unpaid online order cannot be approved and shipped", async () => {
-    const { res } = await place("upi");
+    await seedCatalog();
+    const c = await makeCustomer();
+    const created = await ctx.api(c.token).post("/api/payment/create-order").send({ items: [{ productId: "gold-ring" }], shippingAddress: SHIPPING });
+    expect(created.status).toBe(200);
     const admin = await makeAdmin();
-    const approve = await ctx.api(admin.token).patch(`/api/orders/${res.body.data._id}/approval`).send({ approvalStatus: "APPROVED" });
+    const approve = await ctx.api(admin.token).patch(`/api/orders/${created.body.orderId}/approval`).send({ approvalStatus: "APPROVED" });
     expect(approve.status).toBe(400);
   });
 });

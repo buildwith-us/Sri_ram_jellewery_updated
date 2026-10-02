@@ -503,7 +503,7 @@ describe("owner alerts on order creation", () => {
     const c = await makeCustomer();
     await placeOrder(c.token, [{ productId: "gold-ring" }]);
     expect(mocks().whatsapp.sendOrderAlert).toHaveBeenCalledTimes(1);
-    expect(mocks().whatsapp.sendOrderAlert.mock.calls[0][0].paymentMethod).toBe("cod");
+    expect(mocks().whatsapp.sendOrderAlert.mock.calls[0][0].order.paymentMethod).toBe("cod");
   });
 
   it("an alert failure does not fail the order", async () => {
