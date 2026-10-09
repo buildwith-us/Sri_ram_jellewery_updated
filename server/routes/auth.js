@@ -7,7 +7,7 @@ import { RefreshToken } from "../models/RefreshToken.js";
 import { PasswordResetToken } from "../models/PasswordResetToken.js";
 import { sendMail, sendEmail, renderEmailLayout, emailButton, canDeliverEmail } from "../utils/email.js";
 import { verifyJWT, JWT_SECRET } from "../middleware/auth.js";
-import { otpLimiter, otpVerifyLimiter, authLimiter } from "../middleware/rateLimit.js";
+import { otpLimiter, otpVerifyLimiter, otpRecipientLimiter, authLimiter } from "../middleware/rateLimit.js";
 import { normalizeEmail, canonicalEmailKey } from "../utils/emailIdentity.js";
 import { profileStatus } from "../utils/profile.js";
 // These schemas already existed in middleware/validate.js but were wired to
@@ -169,7 +169,7 @@ const otpEmailText = (code) =>
 // use email + password at /api/auth/login, and nothing on this path can reach
 // their accounts (see isAdminAddress, the emailKey lookup, and the hard-coded
 // USER role in /otp/verify).
-router.post("/otp/request", otpLimiter, async (req, res) => {
+router.post("/otp/request", otpLimiter, otpRecipientLimiter, async (req, res) => {
   try {
     const normalized = normalizeEmail(req.body?.email);
     if (!normalized.ok) {

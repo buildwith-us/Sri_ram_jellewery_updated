@@ -361,7 +361,23 @@ describe("B8 · /api/payment/verify confirms before it checks ownership", () => 
 describe("B9–B11 · rate limiting gaps (NODE_ENV=production)", () => {
   const prod = () => setEnv("NODE_ENV", "production");
 
-  bug("B9: one IP cannot trigger sign-in emails to an unlimited number of addresses", async () => {
+  it("B9: the cap is per IP and per distinct address: 10 addresses pass, the 11th is refused with Retry-After, repeats are free, another IP is unaffected", async () => {
+    prod();
+    const addresses = Array.from({ length: 11 }, () => uniqueEmail("cap"));
+    const send = (email, opts) => ctx.api(null, opts).post("/api/auth/otp/request").send({ email });
+    for (const a of addresses.slice(0, 10)) expect((await send(a)).status).toBe(200);
+    const sentBefore = mocks().resendSend.mock.calls.length;
+    const refused = await send(addresses[10]);
+    expect(refused.status).toBe(429);
+    expect(Number(refused.headers["retry-after"])).toBeGreaterThan(0);
+    expect(mocks().resendSend.mock.calls.length).toBe(sentBefore);
+    // Asking again for an address already counted is not a new recipient.
+    expect((await send(addresses[0])).status).toBe(200);
+    // The cap belongs to that IP: another connection can still send to it.
+    expect((await send(addresses[10], { ip: "198.51.100.9" })).status).toBe(200);
+  });
+
+  it("B9: one IP cannot trigger sign-in emails to an unlimited number of addresses", async () => {
     prod();
     const statuses = [];
     for (let i = 0; i < 25; i++) statuses.push((await ctx.api().post("/api/auth/otp/request").send({ email: uniqueEmail("victim") })).status);

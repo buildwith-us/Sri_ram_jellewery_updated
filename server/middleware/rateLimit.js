@@ -1,4 +1,4 @@
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { normalizeEmail } from "../utils/emailIdentity.js";
 
 /**
@@ -106,3 +106,50 @@ export const otpVerifyLimiter = rateLimit({
   keyGenerator: otpBucket,
   skip: skipInDevelopment,
 });
+
+/**
+ * Cap on how many DIFFERENT addresses one IP may have sign-in codes sent to:
+ * 10 per rolling hour (bug B9).
+ *
+ * otpLimiter caps requests per address, which does nothing against one client
+ * cycling through thousands of addresses — and every code is an email that
+ * costs quota (a hit daily cap means nobody can sign in) and lands in a
+ * stranger's inbox. Repeat requests for an address already counted are free
+ * here; otpLimiter handles those.
+ *
+ * In memory, per instance, like the other limiters. 10 rather than lower
+ * because many customers can share one IP (offices, mobile carriers).
+ */
+export const OTP_RECIPIENTS_PER_IP = 10;
+const OTP_RECIPIENT_WINDOW_MS = 60 * 60 * 1000;
+const recipientsByIp = new Map(); // ip bucket -> Map(emailKey -> first seen ms)
+
+export const otpRecipientLimiter = (req, res, next) => {
+  if (skipInDevelopment()) return next();
+  const n = normalizeEmail(req.body?.email);
+  if (!n.ok) return next(); // the route rejects it; nothing will be sent
+
+  const now = Date.now();
+  const ip = ipKeyGenerator(req.ip || "unknown");
+  const seen = recipientsByIp.get(ip) || new Map();
+  for (const [key, at] of seen) if (now - at >= OTP_RECIPIENT_WINDOW_MS) seen.delete(key);
+
+  if (!seen.has(n.key) && seen.size >= OTP_RECIPIENTS_PER_IP) {
+    const oldest = Math.min(...seen.values());
+    res.set("Retry-After", String(Math.ceil((oldest + OTP_RECIPIENT_WINDOW_MS - now) / 1000)));
+    return res.status(429).json({
+      error: "Too many different email addresses from this connection. Please try again later.",
+    });
+  }
+
+  seen.set(n.key, seen.get(n.key) ?? now);
+  recipientsByIp.set(ip, seen);
+
+  // Keep the map bounded: drop IPs whose entries have all expired.
+  if (recipientsByIp.size > 10_000) {
+    for (const [k, m] of recipientsByIp) {
+      if ([...m.values()].every((at) => now - at >= OTP_RECIPIENT_WINDOW_MS)) recipientsByIp.delete(k);
+    }
+  }
+  next();
+};
