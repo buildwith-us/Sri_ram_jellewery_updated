@@ -1,60 +1,122 @@
 /**
- * Transactional email. One helper, one place that knows how mail is sent.
+ * Transactional email. One module, one place that knows how mail is sent.
  *
- * Everything downstream — password resets, order confirmations, owner alerts —
- * calls `sendEmail()` and never touches the provider SDK. Swapping Resend for
- * SES later is then a change to this file alone.
+ * Everything else calls `sendMail()` (or `sendEmail()` for the HTML reset
+ * mail) and never touches a provider SDK. The provider is an adapter in
+ * PROVIDERS below; swapping Resend for another service is a change here alone.
  *
- * Configuration (all via env, never hardcoded):
- *   RESEND_API_KEY   required to actually send. Unset = dry-run mode.
- *   EMAIL_FROM       e.g. "Sri Ram Jewellery <orders@sriramjewellery.in>"
+ * Configuration (env, never hardcoded):
+ *   EMAIL_PROVIDER   adapter name, default "resend"
+ *   RESEND_API_KEY   the Resend key
+ *   EMAIL_FROM       e.g. "Sri Ram Jewellery <orders@sriramjewellery.in>".
+ *                    Must be on the shop's own domain — never a free webmail
+ *                    address, which fails the receiving side's DMARC checks.
  *   EMAIL_REPLY_TO   optional
- *   EMAIL_DRY_RUN    "true" forces logging instead of sending, even with a key
+ *   EMAIL_DRY_RUN    "true" logs instead of sending — development only
  *
- * ── Dry-run, and why it is the default ────────────────────────────────────
- * With no API key the helper logs the message and reports success rather than
- * throwing. Local development and CI must not need a live mail account, and —
- * more importantly — a missing key must never be able to break a checkout.
- * Email is a side effect of placing an order, not part of placing one.
+ * ── Three modes ───────────────────────────────────────────────────────────
+ *   live        provider configured → mail is sent. A provider error (bad
+ *               key, unverified domain, daily quota hit) is reported as a
+ *               failure, never as success, and logged loudly with the
+ *               provider's reason.
+ *   console     not configured AND NODE_ENV=development → the message,
+ *               including any sign-in code, is printed to the server console
+ *               so the flow can be exercised before a provider exists.
+ *   unavailable not configured anywhere else (production, preview, test) →
+ *               nothing is sent and every call fails. Logged as FATAL at
+ *               startup. The console mode is unreachable here: a preview
+ *               runs with NODE_ENV=production and must not print sign-in
+ *               codes into a log anyone with dashboard access can read.
  *
- * ── Failures never throw ──────────────────────────────────────────────────
- * `sendEmail` resolves to a result object and does not reject. Callers decide
- * whether a failure matters. A password reset should tell the user if the mail
- * could not be queued; an order confirmation must never roll back a paid order
- * because a mail server was briefly unreachable.
+ * Like a missing JWT_SECRET, a missing email config does NOT crash the
+ * server — product pages keep working; only what needs email fails closed.
+ *
+ * Failures never throw. Callers decide whether a failure matters.
  */
 
 import { Resend } from "resend";
 import dotenv from "dotenv";
 dotenv.config();
 
-const apiKey = process.env.RESEND_API_KEY;
-const DRY_RUN = !apiKey || process.env.EMAIL_DRY_RUN === "true";
+// ─── Provider adapters ───────────────────────────────────────────────────────
 
-// Resend's own default sender works before a domain is verified, which lets the
-// reset flow be exercised end to end on day one. It can only deliver to the
-// account owner's address, so it is a development aid, not a launch setting.
-const DEFAULT_FROM = "Sri Ram Jewellery <onboarding@resend.dev>";
+const PROVIDERS = {
+  resend: {
+    label: "Resend",
+    isConfigured: () => Boolean(process.env.RESEND_API_KEY),
+    send: async ({ from, to, subject, text, html, replyTo }) => {
+      const client = new Resend(process.env.RESEND_API_KEY);
+      const { data, error } = await client.emails.send({ from, to, subject, text, html, replyTo });
+      if (error) {
+        // Resend reports failures (including quota) in the payload, not by throwing.
+        const reason = [error.statusCode, error.name, error.message].filter(Boolean).join(" ");
+        return { ok: false, error: reason || String(error) };
+      }
+      return { ok: true, id: data?.id };
+    },
+  },
+};
 
-const client = apiKey ? new Resend(apiKey) : null;
+const providerKey = () => (process.env.EMAIL_PROVIDER || "resend").trim().toLowerCase();
 
-if (DRY_RUN) {
-  console.warn(
-    apiKey
-      ? "✉️  EMAIL_DRY_RUN=true — messages will be logged, not sent."
-      : "✉️  RESEND_API_KEY is not set — email runs in dry-run mode (logged, not sent)."
-  );
-} else if (!process.env.EMAIL_FROM) {
-  console.warn(
-    `✉️  EMAIL_FROM is not set — falling back to ${DEFAULT_FROM}, which can only ` +
-      "deliver to the Resend account owner. Set EMAIL_FROM to a verified domain " +
-      "before real customers depend on it."
-  );
-}
+// Sending as a webmail address from our servers fails that domain's DMARC, so
+// the mail is junked or dropped. The sender must be the shop's own domain.
+const WEBMAIL = /@(gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|icloud|me|aol|proton|protonmail|rediffmail)\.[a-z.]+>?\s*$/i;
+
+const isDevelopment = () => process.env.NODE_ENV === "development";
 
 /**
- * Strip tags for the plain-text alternative. Spam filters weight multipart
- * messages better, and some clients show text only.
+ * Current mode and, when not live, why. Read on every call so a config
+ * change (or a test) takes effect without a restart.
+ *
+ * @returns {{ mode: "live"|"console"|"unavailable", problems: string[], provider: string|null }}
+ */
+export const emailConfig = () => {
+  const provider = PROVIDERS[providerKey()];
+  const from = process.env.EMAIL_FROM?.trim();
+  const problems = [];
+
+  if (!provider) problems.push(`EMAIL_PROVIDER "${providerKey()}" is not supported`);
+  else if (!provider.isConfigured()) problems.push(`${provider.label} API key is not set`);
+  if (!from) problems.push("EMAIL_FROM is not set");
+  else if (WEBMAIL.test(from)) problems.push(`EMAIL_FROM (${from}) must be on the shop's own domain, not a webmail address`);
+
+  const forcedDryRun = isDevelopment() && process.env.EMAIL_DRY_RUN === "true";
+  let mode = "unavailable";
+  if (problems.length === 0 && !forcedDryRun) mode = "live";
+  else if (isDevelopment()) mode = "console";
+
+  return { mode, problems, provider: provider?.label ?? null };
+};
+
+/** True when mail will actually leave the building. */
+export const isEmailLive = () => emailConfig().mode === "live";
+
+/** True when email-dependent features (sign-in codes) can work at all. */
+export const canDeliverEmail = () => emailConfig().mode !== "unavailable";
+
+// Say so at startup. An unconfigured sender means nobody can sign in, so it
+// must be impossible to miss in the deploy log.
+{
+  const { mode, problems } = emailConfig();
+  if (mode === "unavailable") {
+    console.error(
+      "FATAL: email is not configured — " +
+        problems.join("; ") +
+        ". Sign-in codes cannot be sent: /api/auth/otp/request will return 503 until this is fixed."
+    );
+  } else if (mode === "console") {
+    console.warn(
+      `✉️  Email is in CONSOLE mode (development): messages, including sign-in codes, are printed here, not sent.` +
+        (problems.length ? ` (${problems.join("; ")})` : "")
+    );
+  }
+}
+
+// ─── Sending ─────────────────────────────────────────────────────────────────
+
+/**
+ * Strip tags for the plain-text alternative of an HTML message.
  */
 const toPlainText = (html) =>
   String(html)
@@ -68,69 +130,77 @@ const toPlainText = (html) =>
     .trim();
 
 /**
- * Send one transactional email.
+ * Send one email. The single entry point for every message the app sends.
  *
- * @param {object}   opts
+ * @param {object} opts
  * @param {string|string[]} opts.to
- * @param {string}   opts.subject
- * @param {string}   opts.html
- * @param {string}   [opts.text]     defaults to a stripped version of `html`
- * @param {string}   [opts.replyTo]
- * @param {string}   [opts.tag]      short label for the logs, e.g. "password-reset"
- * @returns {Promise<{ ok: boolean, id?: string, dryRun?: boolean, error?: string }>}
+ * @param {string} opts.subject
+ * @param {string} opts.text     plain-text body (always required)
+ * @param {string} [opts.html]   optional HTML alternative
+ * @param {string} [opts.replyTo]
+ * @param {string} [opts.tag]    short label for the logs, e.g. "sign-in-code"
+ * @returns {Promise<{ ok: boolean, id?: string, console?: boolean, unavailable?: boolean, error?: string }>}
  */
-export const sendEmail = async ({ to, subject, html, text, replyTo, tag = "email" }) => {
-  if (!to || !subject || !html) {
-    return { ok: false, error: "sendEmail requires to, subject and html" };
+export const sendMail = async ({ to, subject, text, html, replyTo, tag = "email" }) => {
+  if (!to || !subject || !text) {
+    return { ok: false, error: "sendMail requires to, subject and text" };
   }
 
   const recipients = Array.isArray(to) ? to : [to];
-  const from = process.env.EMAIL_FROM || DEFAULT_FROM;
-  const body = text || toPlainText(html);
+  const { mode, problems, provider } = emailConfig();
 
-  if (DRY_RUN) {
+  if (mode === "unavailable") {
+    console.error(`FATAL: ${tag} NOT sent to ${recipients.join(", ")} — email is not configured (${problems.join("; ")}).`);
+    return { ok: false, unavailable: true, error: "Email is not configured" };
+  }
+
+  if (mode === "console") {
     console.log(
-      `\n── ✉️  [dry-run] ${tag} ───────────────────────────────\n` +
+      `\n── ✉️  [console — development only] ${tag} ─────────────────\n` +
         `To:      ${recipients.join(", ")}\n` +
-        `From:    ${from}\n` +
         `Subject: ${subject}\n\n` +
-        `${body}\n` +
+        `${text}\n` +
         "──────────────────────────────────────────────────────\n"
     );
-    return { ok: true, dryRun: true };
+    return { ok: true, console: true };
   }
 
   try {
-    const { data, error } = await client.emails.send({
-      from,
+    const result = await PROVIDERS[providerKey()].send({
+      from: process.env.EMAIL_FROM.trim(),
       to: recipients,
       subject,
+      text,
       html,
-      text: body,
       replyTo: replyTo || process.env.EMAIL_REPLY_TO || undefined,
     });
-
-    if (error) {
-      // Resend reports failures in the payload rather than by throwing.
-      console.error(`✉️  ${tag} failed:`, error.message || error);
-      return { ok: false, error: error.message || String(error) };
+    if (!result.ok) {
+      console.error(
+        `🚨 EMAIL SEND FAILED — ${tag} to ${recipients.join(", ")} via ${provider}: ${result.error}. ` +
+          "If this is a quota error, nobody can sign in until the quota resets or the plan is raised."
+      );
+      return { ok: false, error: result.error };
     }
-
-    console.log(`✉️  ${tag} sent to ${recipients.join(", ")} (id ${data?.id})`);
-    return { ok: true, id: data?.id };
+    console.log(`✉️  ${tag} sent to ${recipients.join(", ")} via ${provider} (id ${result.id})`);
+    return { ok: true, id: result.id };
   } catch (err) {
-    // Network failure, bad key, provider outage. Never rethrow: the caller
-    // decides whether this is fatal to its own operation.
-    console.error(`✉️  ${tag} threw:`, err.message);
+    // Network failure, provider outage. Never rethrow.
+    console.error(`🚨 EMAIL SEND FAILED — ${tag} to ${recipients.join(", ")} via ${provider}: ${err.message}`);
     return { ok: false, error: err.message };
   }
 };
 
-/** True when mail will actually leave the building. */
-export const isEmailLive = () => !DRY_RUN;
+/**
+ * HTML message (the administrator password reset). A thin wrapper so it goes
+ * through exactly the same modes and failure handling as sendMail.
+ */
+export const sendEmail = ({ to, subject, html, text, replyTo, tag = "email" }) => {
+  if (!html) return Promise.resolve({ ok: false, error: "sendEmail requires to, subject and html" });
+  return sendMail({ to, subject, text: text || toPlainText(html), html, replyTo, tag });
+};
 
 /**
- * Shared shell so every message looks like it came from the same shop.
+ * Shared shell so every HTML message looks like it came from the same shop.
  * Inline styles only — email clients discard <style> blocks.
  */
 export const renderEmailLayout = ({ heading, intro, bodyHtml = "", footerNote }) => `
@@ -166,4 +236,4 @@ export const emailButton = (href, label) => `
   </tr>
 </table>`;
 
-export default sendEmail;
+export default sendMail;

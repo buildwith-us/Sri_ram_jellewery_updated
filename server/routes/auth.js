@@ -606,9 +606,9 @@ router.post("/password/forgot", authLimiter, async (req, res) => {
       });
     }
 
-    if (result.dryRun) {
+    if (result.console) {
       console.warn(
-        `✉️  Email is in dry-run mode — the reset link was NOT emailed. Use it directly:\n   ${resetUrl}`
+        `✉️  Email is in console mode (development) — the reset link was NOT emailed. Use it directly:\n   ${resetUrl}`
       );
     }
 

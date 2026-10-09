@@ -126,20 +126,120 @@ describe("email.js (real module, Resend mocked)", () => {
     expect((await email.sendEmail({ subject: "s", html: "h" })).ok).toBe(false);
   });
 
-  it("dry-run mode when no API key: logs, reports ok, never calls Resend", async () => {
-    vi.resetModules();
-    const saved = process.env.RESEND_API_KEY;
-    delete process.env.RESEND_API_KEY;
+  // ── The three modes (Step 2) ──────────────────────────────────────────────
+  const withEnv = async (vars, fn) => {
+    const saved = {};
+    for (const [k, v] of Object.entries(vars)) {
+      saved[k] = process.env[k];
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     try {
-      const email = await vi.importActual("../../server/utils/email.js");
-      const r = await email.sendEmail({ to: "a@b.test", subject: "s", html: "<p>x</p>" });
-      expect(r).toEqual({ ok: true, dryRun: true });
-      expect(email.isEmailLive()).toBe(false);
-      expect(globalThis.__mocks.resendSend).not.toHaveBeenCalled();
+      return await fn();
     } finally {
-      process.env.RESEND_API_KEY = saved;
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  };
+
+  it("live: sendMail sends plain text through the provider", async () => {
+    const email = await vi.importActual("../../server/utils/email.js");
+    const r = await email.sendMail({ to: "a@b.test", subject: "Code", text: "Your code is 123456", tag: "sign-in-code" });
+    expect(r).toEqual({ ok: true, id: "email_test" });
+    const sent = globalThis.__mocks.resendSend.mock.calls[0][0];
+    expect(sent).toMatchObject({ to: ["a@b.test"], subject: "Code", text: "Your code is 123456" });
+    expect(sent.from).toBe(process.env.EMAIL_FROM);
+    expect(email.emailConfig().mode).toBe("live");
+  });
+
+  it("live: a provider rejection (e.g. daily quota) is a failure and is logged loudly", async () => {
+    globalThis.__mocks.resendSend.mockResolvedValueOnce({
+      data: null,
+      error: { statusCode: 429, name: "daily_quota_exceeded", message: "You have reached your daily email sending quota" },
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const email = await vi.importActual("../../server/utils/email.js");
+    const r = await email.sendMail({ to: "a@b.test", subject: "s", text: "t", tag: "sign-in-code" });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/daily_quota_exceeded/);
+    expect(spy.mock.calls.flat().join(" ")).toMatch(/EMAIL SEND FAILED — sign-in-code .*daily_quota_exceeded/);
+  });
+
+  it("console: unconfigured + NODE_ENV=development prints the message and never calls the provider", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await withEnv({ NODE_ENV: "development", RESEND_API_KEY: undefined }, async () => {
+      const email = await vi.importActual("../../server/utils/email.js");
+      expect(email.emailConfig().mode).toBe("console");
+      const r = await email.sendMail({ to: "a@b.test", subject: "s", text: "Your code is 482913" });
+      expect(r).toEqual({ ok: true, console: true });
+    });
+    expect(globalThis.__mocks.resendSend).not.toHaveBeenCalled();
+    expect(log.mock.calls.flat().join(" ")).toMatch(/482913/);
+  });
+
+  it.each(["production", "test", undefined])(
+    "unavailable: unconfigured + NODE_ENV=%s fails, prints nothing, never calls the provider",
+    async (nodeEnv) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      await withEnv({ NODE_ENV: nodeEnv, RESEND_API_KEY: undefined }, async () => {
+        const email = await vi.importActual("../../server/utils/email.js");
+        expect(email.emailConfig().mode).toBe("unavailable");
+        expect(email.canDeliverEmail()).toBe(false);
+        const r = await email.sendMail({ to: "a@b.test", subject: "s", text: "Your code is 482913" });
+        expect(r).toMatchObject({ ok: false, unavailable: true });
+      });
+      expect(globalThis.__mocks.resendSend).not.toHaveBeenCalled();
+      expect(log.mock.calls.flat().join(" ")).not.toMatch(/482913/);
+    }
+  );
+
+  it("EMAIL_DRY_RUN is honoured only in development", async () => {
+    const email = await vi.importActual("../../server/utils/email.js");
+    await withEnv({ EMAIL_DRY_RUN: "true", NODE_ENV: "production" }, async () => {
+      expect(email.emailConfig().mode).toBe("live");
+    });
+    await withEnv({ EMAIL_DRY_RUN: "true", NODE_ENV: "development" }, async () => {
+      expect(email.emailConfig().mode).toBe("console");
+    });
+  });
+
+  it.each(["Shop <shop@gmail.com>", "shop@googlemail.com", "Shop <x@outlook.com>"])(
+    "a webmail EMAIL_FROM (%s) is not a working configuration",
+    async (from) => {
+      await withEnv({ EMAIL_FROM: from, NODE_ENV: "production" }, async () => {
+        const email = await vi.importActual("../../server/utils/email.js");
+        const cfg = email.emailConfig();
+        expect(cfg.mode).toBe("unavailable");
+        expect(cfg.problems.join(" ")).toMatch(/shop's own domain/);
+      });
+    }
+  );
+
+  it("an unknown EMAIL_PROVIDER is not a working configuration", async () => {
+    await withEnv({ EMAIL_PROVIDER: "carrier-pigeon", NODE_ENV: "production" }, async () => {
+      const email = await vi.importActual("../../server/utils/email.js");
+      expect(email.emailConfig().problems.join(" ")).toMatch(/not supported/);
+    });
+  });
+
+  it("startup logs FATAL when email is unavailable", async () => {
+    vi.resetModules();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await withEnv({ NODE_ENV: "production", RESEND_API_KEY: undefined }, async () => {
+        await vi.importActual("../../server/utils/email.js");
+      });
+      expect(spy.mock.calls.flat().join(" ")).toMatch(/FATAL: email is not configured/);
+    } finally {
       vi.resetModules();
     }
+  });
+
+  it("sendMail requires to, subject and text", async () => {
+    const email = await vi.importActual("../../server/utils/email.js");
+    expect((await email.sendMail({ to: "a@b.test", subject: "s" })).ok).toBe(false);
   });
 
   it("layout helpers render heading, intro and button", async () => {

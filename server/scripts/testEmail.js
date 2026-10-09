@@ -53,8 +53,8 @@ const run = async () => {
   }
 
   console.log(
-    result.dryRun
-      ? "\n✅ Dry run completed. Set RESEND_API_KEY to send for real."
+    result.console
+      ? "\n✅ Printed to the console (development, no provider configured). Set RESEND_API_KEY and EMAIL_FROM to send for real."
       : `\n✅ Sent. Provider message id: ${result.id}`
   );
 };
