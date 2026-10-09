@@ -353,6 +353,17 @@ router.post("/verify", verifyJWT, async (req, res) => {
       return res.status(400).json({ error: "Payment verification failed — invalid signature" });
     }
 
+    // Ownership is checked BEFORE anything changes. It used to be checked after
+    // confirmPayment, so a 403'd caller had already marked the order paid (B8).
+    // The webhook path is unaffected — Razorpay's HMAC authenticates that.
+    const owned = await Order.findOne({ razorpayOrderId: razorpay_order_id }).select("userId").lean();
+    if (!owned) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+    if (owned.userId !== req.user.userId) {
+      return res.status(403).json({ error: "Not authorized to confirm this order" });
+    }
+
     const { order, alreadyConfirmed } = await confirmPayment({
       razorpayOrderId: razorpay_order_id,
       razorpayPaymentId: razorpay_payment_id,
@@ -361,12 +372,6 @@ router.post("/verify", verifyJWT, async (req, res) => {
 
     if (!order) {
       return res.status(404).json({ error: "Order not found" });
-    }
-
-    // Scoped to the caller: the signature is the real gate, but an order should
-    // only ever be readable by the customer it belongs to.
-    if (order.userId !== req.user.userId) {
-      return res.status(403).json({ error: "Not authorized to confirm this order" });
     }
 
     res.json({

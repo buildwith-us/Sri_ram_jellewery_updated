@@ -500,8 +500,23 @@ describe("B7 · user input was compiled into regular expressions (fixed)", () =>
 
 // ─── B8 ──────────────────────────────────────────────────────────────────────
 
-describe("B8 · /api/payment/verify confirms before it checks ownership", () => {
-  bug("B8: a 403'd verify leaves the order untouched", async () => {
+describe("B8 · /api/payment/verify confirmed before it checked ownership (fixed)", () => {
+  it("B8: after a refused intruder, the owner's verify still confirms it — once, with one alert", async () => {
+    await seedCatalog();
+    const owner = await makeCustomer();
+    const intruder = await makeCustomer();
+    const created = await createPayment(owner.token, { items: [{ productId: "gold-ring" }] });
+    const rzp = created.body.razorpayOrderId;
+    const body = { razorpay_order_id: rzp, razorpay_payment_id: "pay_X", razorpay_signature: razorpaySignature(rzp, "pay_X") };
+    expect((await ctx.api(intruder.token).post("/api/payment/verify").send(body)).status).toBe(403);
+    expect(mocks().whatsapp.sendOrderAlert).not.toHaveBeenCalled();
+    const ok = await ctx.api(owner.token).post("/api/payment/verify").send(body);
+    expect(ok.status).toBe(200);
+    expect(ok.body.message).toBe("Payment verified successfully");
+    expect(mocks().whatsapp.sendOrderAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("B8: a 403'd verify leaves the order untouched", async () => {
     await seedCatalog();
     const owner = await makeCustomer();
     const intruder = await makeCustomer();
