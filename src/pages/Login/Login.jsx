@@ -6,9 +6,6 @@ const Login = () => (
     helmetTitle="Sign In"
     heroEyebrow="Heritage Craftsmanship"
     heroHeadline="Timeless Elegance, Handcrafted for You."
-    bottomText="New here? The same email creates your account."
-    bottomLinkTo="/register"
-    bottomLinkLabel="Create an account"
   />
 );
 

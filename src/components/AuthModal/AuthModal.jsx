@@ -18,7 +18,8 @@ const FOCUSABLE =
  * `profilePrompt` ({ email, missing, name, phone }) opens it straight at the
  * details step, for a signed-in customer whose profile is incomplete. At that
  * step the customer is already signed in, so closing signs them out — the
- * details cannot be skipped.
+ * details cannot be skipped. A new sign-up has nothing saved until its code
+ * is verified, so closing at any of its steps leaves nothing behind.
  */
 const AuthModal = ({ isOpen, message, profilePrompt, onDismiss, onComplete }) => {
   const flow = useOtpAuthFlow({ onSignedIn: onComplete });
@@ -56,7 +57,7 @@ const AuthModal = ({ isOpen, message, profilePrompt, onDismiss, onComplete }) =>
   if (!isOpen) return null;
 
   const dismiss = () => {
-    if (!flow.busy) onDismiss?.({ signedInMidFlow: flow.step === "details" });
+    if (!flow.busy) onDismiss?.({ signedInMidFlow: flow.signedInMidFlow });
   };
 
   const onKeyDown = (event) => {
@@ -80,7 +81,9 @@ const AuthModal = ({ isOpen, message, profilePrompt, onDismiss, onComplete }) =>
   };
 
   const heading = stepHeading(flow);
-  const closeSignsOut = flow.step === "details";
+  // Only an existing account's details step is signed in. A new sign-up's
+  // details are held unsaved, so closing simply abandons them.
+  const closeSignsOut = flow.signedInMidFlow;
 
   return createPortal(
     <div

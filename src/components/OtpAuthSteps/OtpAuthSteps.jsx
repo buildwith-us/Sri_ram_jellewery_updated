@@ -14,24 +14,74 @@ const linkButton =
   "text-on-surface-variant font-label-caps text-[10px] uppercase tracking-widest hover:text-primary transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed min-h-11";
 
 /** Heading copy for each step, for whichever container renders the steps. */
-export const stepHeading = (flow) =>
-  ({
-    email: {
-      eyebrow: "Sign in or create an account",
-      title: "Welcome",
-      subtitle: "Enter your email and we'll send you a 6-digit code. No password needed.",
-    },
-    code: {
+export const stepHeading = (flow) => {
+  if (flow.step === "code") {
+    return {
       eyebrow: "Check your inbox",
       title: "Enter your code",
       subtitle: `We sent a 6-digit code to ${flow.email}. It expires in 5 minutes.`,
-    },
-    details: {
+    };
+  }
+  if (flow.step === "email") {
+    return flow.mode === "create"
+      ? {
+          eyebrow: "Create an account",
+          title: "Your email",
+          subtitle: "We'll send a 6-digit code to confirm it. Your account is created once it's confirmed.",
+        }
+      : {
+          eyebrow: "Sign in",
+          title: "Welcome",
+          subtitle: "Enter your email and we'll send you a 6-digit code. No password needed.",
+        };
+  }
+  // details
+  if (flow.stage === "profile") {
+    return {
       eyebrow: "Almost there",
       title: "Your details",
       subtitle: "So we know who to address, and the number to call about your delivery.",
-    },
-  })[flow.step];
+    };
+  }
+  if (flow.stage === "newAccount") {
+    return {
+      eyebrow: "New here",
+      title: "Create your account",
+      subtitle: `There's no account for ${flow.email} yet. Add your name and mobile number to create one.`,
+    };
+  }
+  return {
+    eyebrow: "Create an account",
+    title: "Your details",
+    subtitle: "Your name, and the mobile number we call about delivery. Next, we'll confirm your email.",
+  };
+};
+
+/** "New here?" / "Already have an account?" — the same switch in every container. */
+const ModeSwitch = ({ flow }) =>
+  flow.mode === "create" ? (
+    <p className="text-center font-body-base text-sm text-on-surface-variant">
+      Already have an account?{" "}
+      <button
+        type="button"
+        onClick={() => flow.switchMode("signin")}
+        className="text-primary font-semibold hover:text-secondary transition-colors inline-flex items-center min-h-11 cursor-pointer"
+      >
+        Sign in
+      </button>
+    </p>
+  ) : (
+    <p className="text-center font-body-base text-sm text-on-surface-variant">
+      New here?{" "}
+      <button
+        type="button"
+        onClick={() => flow.switchMode("create")}
+        className="text-primary font-semibold hover:text-secondary transition-colors inline-flex items-center min-h-11 cursor-pointer"
+      >
+        Create an account
+      </button>
+    </p>
+  );
 
 const Spinner = () => <span className="loading loading-spinner loading-md" aria-hidden="true"></span>;
 
@@ -81,6 +131,7 @@ const OtpAuthSteps = ({ flow, idPrefix = "auth" }) => {
           <button type="submit" className={primaryButton} disabled={flow.busy || !emailValue.trim()}>
             {flow.busy ? <Spinner /> : "Send code"}
           </button>
+          <ModeSwitch flow={flow} />
         </form>
       )}
 
@@ -180,8 +231,9 @@ const OtpAuthSteps = ({ flow, idPrefix = "auth" }) => {
             </p>
           </div>
           <button type="submit" className={primaryButton} disabled={flow.busy || !name.trim() || !phone.trim()}>
-            {flow.busy ? <Spinner /> : "Continue"}
+            {flow.busy ? <Spinner /> : flow.stage === "newAccount" ? "Create account" : "Continue"}
           </button>
+          {flow.stage === "signup" && <ModeSwitch flow={flow} />}
         </form>
       )}
     </div>

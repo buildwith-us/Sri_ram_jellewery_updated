@@ -6,9 +6,7 @@ const Register = () => (
     helmetTitle="Sign Up"
     heroEyebrow="Timeless Craftsmanship"
     heroHeadline="Since generations, we have been crafting stories in gold and precious stones. Join our circle of Heritage."
-    bottomText="Already have an account?"
-    bottomLinkTo="/login"
-    bottomLinkLabel="Sign In"
+    initialMode="create"
   />
 );
 

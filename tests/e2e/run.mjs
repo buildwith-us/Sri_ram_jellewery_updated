@@ -20,6 +20,7 @@
  */
 import { chromium } from "playwright";
 import { MongoMemoryServer } from "mongodb-memory-server";
+import { MongoClient } from "mongodb";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -135,9 +136,13 @@ const expectTrue = (cond, msg) => {
 const api = async (method, p, { token, body } = {}) => {
   const r = await fetch(`${API}${p}`, {
     method,
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
+
   const text = await r.text();
   let json;
   try {
@@ -146,6 +151,28 @@ const api = async (method, p, { token, body } = {}) => {
     json = text;
   }
   return { status: r.status, body: json };
+};
+
+let mongoUri = null;
+/** An account as it exists in old data — the site can no longer create one without a phone. */
+const insertUser = async (doc) => {
+  const client = await MongoClient.connect(mongoUri);
+  try {
+    await client.db("e2e").collection("users").insertOne({ ...doc, createdAt: new Date(), updatedAt: new Date() });
+  } finally {
+    await client.close();
+  }
+};
+let adminTokenCache = null;
+const adminToken = async () => {
+  if (adminTokenCache) return adminTokenCache;
+  const r = await fetch(`${API}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD }),
+  });
+  adminTokenCache = (await r.json()).accessToken;
+  return adminTokenCache;
 };
 
 const tokenOf = (page) => page.evaluate(() => localStorage.getItem("sri-ram-access-token"));
@@ -299,7 +326,7 @@ const signInWithEmail = async (page, email, { prefix = "auth-modal", name = "E2E
   if (details) {
     await nameInput.fill(name);
     await page.locator(`#${prefix}-phone`).fill(phone);
-    await page.getByRole("button", { name: /^continue$/i }).click();
+    await page.getByRole("button", { name: /^(continue|create account)$/i }).click();
   }
   return details;
 };
@@ -713,26 +740,28 @@ const runTimedPromptFlow = async (browser, viewport, seeded) => {
 };
 
 /**
- * A signed-in customer always has a name and a phone: the details step that
- * follows the code cannot be skipped from the modal or the sign-in pages, and
- * a session with an incomplete profile is asked again on any page.
+ * Registration: name + phone → email → code, and nothing is saved before the
+ * code. Sign in for an address with no account asks for name + phone after
+ * the code. An EXISTING account with gaps (made before both were required) is
+ * asked again on any page, and closing that step signs out.
  */
-const runProfileGateFlow = async (browser, viewport, seeded) => {
+const runRegistrationFlow = async (browser, viewport, seeded) => {
   const context = await newContext(browser, viewport);
   const page = await context.newPage();
   const p4 = seeded.p4;
   const dialog = () => page.getByRole("dialog");
-  const modalEmail = freshEmail(`gate-${viewport}`);
-  const pageEmail = freshEmail(`gate-page-${viewport}`);
+  const modalEmail = freshEmail(`reg-modal-${viewport}`);
+  const registerEmail = freshEmail(`reg-page-${viewport}`);
+  const clashEmail = freshEmail(`reg-clash-${viewport}`);
+  const legacyEmail = freshEmail(`reg-legacy-${viewport}`);
+  let registeredPhone;
 
-  // Email and code only, stopping at the details step.
-  const reachDetails = async (prefix, email) => {
+  const enterCode = async (prefix, email) => {
     await page.locator(`#${prefix}-email`).fill(email);
     await page.getByRole("button", { name: /^send code$/i }).click();
     await page.locator(`#${prefix}-code`).waitFor({ timeout: 10_000 });
     await page.locator(`#${prefix}-code`).fill(await codeFor(email));
     await page.getByRole("button", { name: /verify & continue/i }).click();
-    await page.locator(`#${prefix}-name`).waitFor({ timeout: 10_000 });
   };
   const waitForToken = async (want) => {
     for (let i = 0; i < 30; i++) {
@@ -741,29 +770,32 @@ const runProfileGateFlow = async (browser, viewport, seeded) => {
     }
     return false;
   };
+  const accountFor = async (email) => {
+    const users = (await api("GET", "/users", { token: await adminToken() })).body;
+    return users.find((u) => u.email === email || u.emailKey === email) || null;
+  };
+  const signOut = () => page.evaluate(() => localStorage.clear());
 
-  await flow(viewport, "Details step can't be skipped", page, [
-    ["Modal: closing the details step signs the new customer out", async () => {
+  await flow(viewport, "Registration", page, [
+    ["Modal, unknown email: closing at name + phone leaves no account and no session", async () => {
       await goto(page, `/products/${p4._id}/description`);
       await dismissNudge(page);
       await page.getByRole("button", { name: /add to bag/i }).click();
       await dialog().waitFor({ timeout: 5_000 });
-      await reachDetails("auth-modal", modalEmail);
-      await page.getByText(/closing this signs you out/i).waitFor({ timeout: 3_000 });
-      // The ✕ says what it does here. Closed with Esc (the same dismiss path):
-      // with the icon font blocked, the phone-width header overflows and the
-      // ✕ sits outside the 390px viewport.
-      expectTrue(await page.getByRole("button", { name: /close and sign out/i }).count() === 1, "the close button doesn't say it signs out");
+      await enterCode("auth-modal", modalEmail);
+      await page.locator("#auth-modal-name").waitFor({ timeout: 10_000 });
+      await page.getByText(/no account for .* yet/i).waitFor({ timeout: 3_000 });
+      expectTrue(!(await tokenOf(page)), "signed in before the account exists");
       await page.keyboard.press("Escape");
       await dialog().waitFor({ state: "detached", timeout: 5_000 });
-      expectTrue(await waitForToken(false), "still signed in after closing the details step");
-      await page.getByText(/we need your name and mobile number/i).first().waitFor({ timeout: 5_000 });
+      expectTrue(!(await tokenOf(page)), "signed in after closing");
+      expectTrue(!(await accountFor(modalEmail)), "an account was created without name and phone");
     }],
-    ["Signing in again asks for the details again; then the bag action resumes", async () => {
+    ["Modal: name + phone after the code creates the account; the bag action resumes", async () => {
       await page.getByRole("button", { name: /add to bag/i }).click();
       await dialog().waitFor({ timeout: 5_000 });
       const asked = await signInWithEmail(page, modalEmail);
-      expectTrue(asked, "a customer who skipped the details was not asked again");
+      expectTrue(asked, "name and phone were not asked for");
       await dialog().waitFor({ state: "detached", timeout: 10_000 });
       const token = await tokenOf(page);
       let cart = [];
@@ -771,35 +803,87 @@ const runProfileGateFlow = async (browser, viewport, seeded) => {
         cart = (await api("GET", "/cart", { token })).body;
         if (!cart.length) await page.waitForTimeout(300);
       }
-      expectTrue(cart.length === 1 && cart[0].productId === p4.productId, `bag: ${JSON.stringify(cart)}`);
-      await page.evaluate(() => localStorage.clear());
+      expectTrue(Array.isArray(cart) && cart.length === 1 && cart[0].productId === p4.productId, `bag: ${JSON.stringify(cart)}`);
+      const me = (await api("GET", "/users/me", { token })).body.data;
+      expectTrue(me.profileComplete === true, `profile: ${JSON.stringify(me)}`);
+      await signOut();
     }],
-    ["/login: walking away from the details step brings it back on the next page", async () => {
+    ["/register: name + phone first, then email and code; nothing saved before the code", async () => {
+      await goto(page, "/register");
+      await page.getByText(/next, we'll confirm your email/i).waitFor({ timeout: 5_000 });
+      await page.locator("#auth-page-name").fill("Register Path");
+      // A bad number is caught here, before any email is sent.
+      await page.locator("#auth-page-phone").fill("12345");
+      await page.getByRole("button", { name: /^continue$/i }).click();
+      await page.getByRole("alert").waitFor({ timeout: 3_000 });
+      expectTrue(await page.locator("#auth-page-email").count() === 0, "moved on with an invalid number");
+      registeredPhone = freshPhone();
+      await page.locator("#auth-page-phone").fill(registeredPhone);
+      await page.getByRole("button", { name: /^continue$/i }).click();
+      await page.locator("#auth-page-email").fill(registerEmail);
+      await page.getByRole("button", { name: /^send code$/i }).click();
+      await page.locator("#auth-page-code").waitFor({ timeout: 10_000 });
+      expectTrue(!(await accountFor(registerEmail)), "an account exists before the code was entered");
+      await page.locator("#auth-page-code").fill(await codeFor(registerEmail));
+      await page.getByRole("button", { name: /verify & continue/i }).click();
+      await page.waitForURL(/\/welcome/, { timeout: 10_000 });
+      const me = (await api("GET", "/users/me", { token: await tokenOf(page) })).body.data;
+      expectTrue(me.name === "Register Path" && me.phone === `+91${registeredPhone}` && me.profileComplete, `profile: ${JSON.stringify({ name: me.name, phone: me.phone })}`);
+      await signOut();
+    }],
+    ["A taken phone is only reported after the code; changing it creates the account", async () => {
+      await goto(page, "/register");
+      await page.locator("#auth-page-name").fill("Clash Path");
+      await page.locator("#auth-page-phone").fill(registeredPhone);
+      await page.getByRole("button", { name: /^continue$/i }).click();
+      // No lookup before the code: the email step comes up as for any number.
+      await page.locator("#auth-page-email").waitFor({ timeout: 5_000 });
+      await enterCode("auth-page", clashEmail);
+      await page.getByText(/already linked to another account/i).waitFor({ timeout: 10_000 });
+      expectTrue(await page.locator("#auth-page-phone").inputValue() !== "", "the typed number was cleared");
+      expectTrue(!(await tokenOf(page)) && !(await accountFor(clashEmail)), "an account or session exists after the clash");
+      await page.locator("#auth-page-phone").fill(freshPhone());
+      await page.getByRole("button", { name: /^continue$/i }).click();
+      await page.waitForURL(/\/welcome/, { timeout: 10_000 });
+      expectTrue(Boolean(await accountFor(clashEmail)), "no account after fixing the number");
+      await signOut();
+    }],
+    ["An existing account with no phone: asked after the code; closing signs out", async () => {
+      await insertUser({ emailKey: legacyEmail, email: legacyEmail, role: "USER", name: "Half Done" });
       await goto(page, "/login");
-      await reachDetails("auth-page", pageEmail);
+      await enterCode("auth-page", legacyEmail);
+      await page.locator("#auth-page-name").waitFor({ timeout: 10_000 });
+      expectTrue(await page.locator("#auth-page-name").inputValue() === "Half Done", "name not prefilled");
+      expectTrue(await waitForToken(true), "an existing account is not signed in at its details step");
+      // Walking off the page: the next page asks again.
       await goto(page, "/shop");
       await page.locator("#auth-modal-name").waitFor({ timeout: 10_000 });
-      expectTrue(await dialog().isVisible(), "no details dialog on the next page");
+      await page.getByText(/closing this signs you out/i).waitFor({ timeout: 3_000 });
+      expectTrue(await page.getByRole("button", { name: /close and sign out/i }).count() === 1, "the close button doesn't say it signs out");
+      await page.keyboard.press("Escape");
+      await dialog().waitFor({ state: "detached", timeout: 5_000 });
+      expectTrue(await waitForToken(false), "still signed in after closing");
+      await page.getByText(/we need your name and mobile number/i).first().waitFor({ timeout: 5_000 });
     }],
-    ["A reload asks again, prefilled with what the account has; a bad number is refused", async () => {
-      const token = await tokenOf(page);
-      expectTrue((await api("PATCH", "/users/me", { token, body: { name: "Half Done" } })).status === 200, "PATCH name");
+    ["…and on a reload it asks again, refuses a bad number, then saves once", async () => {
+      await goto(page, "/login");
+      await enterCode("auth-page", legacyEmail);
+      await page.locator("#auth-page-name").waitFor({ timeout: 10_000 });
       await page.reload();
-      await page.locator("#auth-modal-name").waitFor({ timeout: 10_000 });
-      const name = await page.locator("#auth-modal-name").inputValue();
-      expectTrue(name === "Half Done", `name not prefilled: "${name}"`);
+      await page.locator("#auth-modal-name").waitFor({ timeout: 10_000 }).catch(async () => {
+        // /login itself shows a fresh sign-in on reload; any other page asks.
+        await goto(page, "/");
+        await page.locator("#auth-modal-name").waitFor({ timeout: 10_000 });
+      });
       await page.locator("#auth-modal-phone").fill("12345");
       await page.getByRole("button", { name: /^continue$/i }).click();
       await dialog().getByRole("alert").waitFor({ timeout: 5_000 });
-      expectTrue(await dialog().isVisible(), "an invalid phone closed the dialog");
-    }],
-    ["Valid details save once; the next reload asks nothing", async () => {
       const phone = freshPhone();
       await page.locator("#auth-modal-phone").fill(phone);
       await page.getByRole("button", { name: /^continue$/i }).click();
       await dialog().waitFor({ state: "detached", timeout: 10_000 });
       const me = (await api("GET", "/users/me", { token: await tokenOf(page) })).body.data;
-      expectTrue(me.profileComplete === true && me.phone === `+91${phone}` && me.name === "Half Done", `profile: ${JSON.stringify({ name: me.name, phone: me.phone, complete: me.profileComplete })}`);
+      expectTrue(me.profileComplete === true && me.phone === `+91${phone}` && me.name === "Half Done", `profile: ${JSON.stringify({ name: me.name, phone: me.phone })}`);
       await page.reload();
       await page.waitForTimeout(3_000);
       expectTrue(!(await dialog().isVisible()), "asked again after the profile was complete");
@@ -958,6 +1042,7 @@ const runLegalPages = async (browser, viewport) => {
 
 const main = async () => {
   const mongod = await MongoMemoryServer.create();
+  mongoUri = mongod.getUri();
   try {
     const apiEnv = {
       PATH: process.env.PATH,
@@ -998,7 +1083,7 @@ const main = async () => {
       const ctxs = [];
       ctxs.push(await runCustomerFlows(browser, viewport, seeded, shared));
       ctxs.push(await runTimedPromptFlow(browser, viewport, seeded));
-      ctxs.push(await runProfileGateFlow(browser, viewport, seeded));
+      ctxs.push(await runRegistrationFlow(browser, viewport, seeded));
       ctxs.push(await runAdminFlows(browser, viewport, shared));
       ctxs.push(await runLegalPages(browser, viewport));
       for (const c of ctxs) await c.close();

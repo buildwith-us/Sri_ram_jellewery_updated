@@ -125,19 +125,33 @@ const AuthProvider = ({ children }) => {
    * Verify a sign-in code — POST /api/auth/otp/verify. The response says
    * whether the profile is complete (profileComplete / missing), so callers
    * never have to infer it from the user record.
+   *
+   * `details` ({ name, phone }) creates the account when the address has none
+   * yet. Without them, such an address answers `needsDetails` and no session:
+   * nothing is stored here until the server has created the account.
    */
-  const verifyOtp = async (email, otp) => {
+  const verifyOtp = async (email, otp, details) => {
     setIsAuthLoading(true);
     try {
-      const res = await axios.post(`${apiBase}/auth/otp/verify`, { email, otp });
+      const res = await axios.post(`${apiBase}/auth/otp/verify`, { email, otp, ...(details || {}) });
       const { accessToken, refreshToken, user: userData } = res.data;
+      if (!accessToken) {
+        setIsAuthLoading(false);
+        return res.data;
+      }
       storeTokens(accessToken, refreshToken);
       setUser(userData);
       setIsAuthLoading(false);
       return res.data;
     } catch (error) {
       setIsAuthLoading(false);
-      throw error.response?.data || error;
+      // With the status, so the flow can tell a refused code (401) from
+      // refused details (400, or 409 for a phone already registered).
+      const body = error.response?.data;
+      throw {
+        ...(body && typeof body === "object" ? body : { error: error.message }),
+        status: error.response?.status,
+      };
     }
   };
 

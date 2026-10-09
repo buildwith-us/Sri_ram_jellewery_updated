@@ -7,13 +7,13 @@ import OtpAuthSteps, { stepHeading } from "../OtpAuthSteps/OtpAuthSteps";
 
 /**
  * The full-page sign-in used by /login and /register. Same flow and the same
- * forms as the sign-in modal (useOtpAuthFlow + OtpAuthSteps): email, then the
- * emailed code, then name and phone for a new account. The two pages differ
- * only in their copy.
+ * forms as the sign-in modal (useOtpAuthFlow + OtpAuthSteps), including the
+ * Sign in / Create account switch. /login opens on Sign in (email → code),
+ * /register on Create account (name + phone → email → code).
  *
  * Reached directly, by PrivateRoute (state.from), or after a session expired.
  */
-const AuthForm = ({ helmetTitle, heroEyebrow, heroHeadline, bottomText, bottomLinkTo, bottomLinkLabel }) => {
+const AuthForm = ({ helmetTitle, heroEyebrow, heroHeadline, initialMode = "signin" }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -23,6 +23,7 @@ const AuthForm = ({ helmetTitle, heroEyebrow, heroHeadline, bottomText, bottomLi
   if (from.includes("dashboard")) from = "/";
 
   const flow = useOtpAuthFlow({
+    initialMode,
     onSignedIn: ({ isNewAccount, user }) => {
       if (isNewAccount) {
         // A new account sees the short onboarding once, then carries on.
@@ -85,18 +86,6 @@ const AuthForm = ({ helmetTitle, heroEyebrow, heroHeadline, bottomText, bottomLi
 
           <OtpAuthSteps key={`${flow.step}:${flow.email}`} flow={flow} idPrefix="auth-page" />
 
-          {flow.step === "email" && bottomLinkTo && (
-            <p className="text-center mt-8 font-body-base text-sm text-on-surface-variant">
-              {bottomText}{" "}
-              <Link
-                to={bottomLinkTo}
-                state={location.state}
-                className="text-primary font-semibold hover:text-secondary transition-colors inline-flex items-center min-h-11"
-              >
-                {bottomLinkLabel}
-              </Link>
-            </p>
-          )}
 
           <div className="flex items-center justify-center gap-2 mt-12 text-on-surface-variant/60">
             <span className="material-symbols-outlined text-[16px]" aria-hidden="true">verified_user</span>
