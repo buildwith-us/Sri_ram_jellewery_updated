@@ -27,7 +27,8 @@ const AddReview = () => {
     enabled: !isAuthLoading && user !== null && user !== undefined,
     queryFn: async () => {
       const reviews = await axiosSecure.get("/reviews");
-      const reviewByUser = (reviews.data || []).find((r) => r.userId === user._id);
+      // The API marks the reader's own reviews (it no longer publishes userId).
+      const reviewByUser = (reviews.data || []).find((r) => r.mine);
       setUserReview(reviewByUser || null);
       return reviews.data;
     },

@@ -385,45 +385,90 @@ describe("S4 · OTP limiters keyed on the raw identity (fixed for email sign-in)
 
 // ─── S5 ──────────────────────────────────────────────────────────────────────
 
-describe("S5 · reviews", () => {
-  bug("S5a: a customer cannot review a product they never bought", async () => {
+describe("S5 · reviews (fixed)", () => {
+  /** A customer whose order for `productId` has been delivered. */
+  const buyer = async (productId = "gold-ring", over = {}) => {
+    const c = await makeCustomer(over);
+    await insertOrder({ userId: String(c.user._id), orderStatus: "delivered", approvalStatus: "APPROVED", items: [{ productId, name: productId, quantity: 1, unitPrice: 1 }] });
+    return c;
+  };
+
+  it("S5a: a customer cannot review a product they never bought", async () => {
     await seedCatalog();
     const c = await makeCustomer();
     const res = await ctx.api(c.token).post("/api/reviews").send({ productId: "gold-ring", review: "Fake 5 stars", rating: 5 });
     expect(res.status).toBe(403);
   });
 
-  bug("S5b: a review for a non-existent productId is refused", async () => {
+  it("S5a: buying means DELIVERED — an approved (not yet delivered) order is not enough", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    await insertOrder({ userId: String(c.user._id), approvalStatus: "APPROVED", orderStatus: "shipped" });
+    const res = await ctx.api(c.token).post("/api/reviews").send({ productId: "gold-ring", review: "x", rating: 5 });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/once it has been delivered/);
+  });
+
+  it("S5a: after delivery the review is accepted (by productId or by _id)", async () => {
+    const cat = await seedCatalog();
+    const c = await buyer();
+    const res = await ctx.api(c.token).post("/api/reviews").send({ productId: String(cat.gold._id), review: "Beautiful", rating: 5 });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ productId: "gold-ring", productName: "Gold Ring", mine: true });
+  });
+
+  it("S5b: a review for a non-existent productId is refused", async () => {
     const c = await makeCustomer();
     const res = await ctx.api(c.token).post("/api/reviews").send({ productId: "does-not-exist", review: "x", rating: 1 });
     expect(res.status).toBe(404);
   });
 
-  bug("S5c: the reviewer's display name comes from their account, not the request body", async () => {
+  it("S5c: the reviewer's display name comes from their account, not the request body", async () => {
     const c = await makeCustomer({ name: "Real Name" });
     const res = await ctx.api(c.token).post("/api/reviews").send({ review: "x", rating: 5, name: "Sri Ram Jewellery (Official)" });
     expect(res.body.data.name).toBe("Real Name");
   });
 
-  bug("S5d: public GET /api/reviews does not expose userId", async () => {
+  it("S5d: public GET /api/reviews does not expose userId", async () => {
     const c = await makeCustomer();
     await Review.create({ name: "A", review: "r", rating: 5, userId: String(c.user._id), productId: "p" });
     const all = await ctx.api().get("/api/reviews");
     expect(all.body[0].userId).toBeUndefined();
   });
 
-  bug("S5e: public GET /api/reviews/:productId does not expose userId", async () => {
+  it("S5e: public GET /api/reviews/:productId does not expose userId", async () => {
     const c = await makeCustomer();
     await Review.create({ name: "A", review: "r", rating: 5, userId: String(c.user._id), productId: "p" });
     const one = await ctx.api().get("/api/reviews/p");
     expect(one.body.data[0].userId).toBeUndefined();
   });
 
-  bug("S5f: one review per customer per product", async () => {
+  it("S5d/e: instead, `mine` marks the signed-in reader's own reviews", async () => {
+    const me = await makeCustomer();
+    const other = await makeCustomer();
+    await Review.create({ name: "Me", review: "r", rating: 5, userId: String(me.user._id), productId: "p" });
+    await Review.create({ name: "Them", review: "r", rating: 4, userId: String(other.user._id), productId: "p" });
+    const mine = (await ctx.api(me.token).get("/api/reviews/p")).body.data;
+    expect(Object.fromEntries(mine.map((r) => [r.name, r.mine]))).toEqual({ Me: true, Them: false });
+    const guest = (await ctx.api().get("/api/reviews")).body;
+    expect(guest.every((r) => r.mine === false)).toBe(true);
+  });
+
+  it("S5f: one review per customer per product", async () => {
     await seedCatalog();
-    const c = await makeCustomer();
-    for (let i = 0; i < 3; i++) await ctx.api(c.token).post("/api/reviews").send({ productId: "gold-ring", review: `r${i}`, rating: 5 });
+    const c = await buyer();
+    const statuses = [];
+    for (let i = 0; i < 3; i++) statuses.push((await ctx.api(c.token).post("/api/reviews").send({ productId: "gold-ring", review: `r${i}`, rating: 5 })).status);
+    expect(statuses).toEqual([201, 409, 409]);
     expect(await Review.countDocuments({ productId: "gold-ring" })).toBe(1);
+  });
+
+  it("S5f: after deleting their review, the customer may write a new one", async () => {
+    await seedCatalog();
+    const c = await buyer();
+    const first = await ctx.api(c.token).post("/api/reviews").send({ productId: "gold-ring", review: "a", rating: 3 });
+    await ctx.api(c.token).delete(`/api/reviews/${first.body.data._id}`);
+    expect((await ctx.api(c.token).post("/api/reviews").send({ productId: "gold-ring", review: "b", rating: 5 })).status).toBe(201);
   });
 });
 

@@ -13,20 +13,29 @@ const ctx = useApp();
 // ─── Reviews ─────────────────────────────────────────────────────────────────
 
 describe("reviews", () => {
-  it("create → 201 with the caller's userId; GET by product and GET all", async () => {
-    const c = await makeCustomer();
-    const res = await ctx.api(c.token).post("/api/reviews").send({ productId: "gold-ring", productName: "Gold Ring", review: "Lovely", rating: "5", name: "Asha" });
+  it("create → 201 (a delivered buyer); GET by product and GET all", async () => {
+    const c = await makeCustomer({ name: "Asha" });
+    await seedCatalog();
+    await insertOrder({ userId: String(c.user._id), orderStatus: "delivered", approvalStatus: "APPROVED" });
+    const res = await ctx.api(c.token).post("/api/reviews").send({ productId: "gold-ring", productName: "Gold Ring", review: "Lovely", rating: "5", name: "Ignored" });
     expect(res.status).toBe(201);
-    expect(res.body.data).toMatchObject({ rating: 5, userId: String(c.user._id), name: "Asha" });
+    expect(res.body.data).toMatchObject({ rating: 5, name: "Asha", mine: true });
+    expect(res.body.data.userId).toBeUndefined();
     expect((await ctx.api().get("/api/reviews/gold-ring")).body.data).toHaveLength(1);
     expect((await ctx.api().get("/api/reviews/other")).body.data).toHaveLength(0);
     expect(await ctx.api().get("/api/reviews").then((r) => r.body)).toHaveLength(1);
   });
 
-  it("site testimonial without productId; name defaults to Anonymous", async () => {
-    const c = await makeCustomer();
+  it("site testimonial without productId: no purchase needed; the name comes from the account", async () => {
+    const c = await makeCustomer({ name: "Priya" });
     const res = await ctx.api(c.token).post("/api/reviews").send({ review: "Great shop", rating: 4 });
-    expect(res.body.data.name).toBe("Anonymous");
+    expect(res.status).toBe(201);
+    expect(res.body.data.name).toBe("Priya");
+  });
+
+  it("an account with no name posts as 'Customer'", async () => {
+    const c = await makeCustomer({ name: undefined });
+    expect((await ctx.api(c.token).post("/api/reviews").send({ review: "x", rating: 4 })).body.data.name).toBe("Customer");
   });
 
   it.each([

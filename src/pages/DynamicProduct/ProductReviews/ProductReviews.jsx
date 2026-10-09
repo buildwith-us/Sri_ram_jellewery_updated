@@ -51,7 +51,8 @@ const ProductReviews = () => {
     fetchReviews();
   }, [fetchReviews]);
 
-  const hasUserReviewed = !!(user && reviews.some((r) => r.userId === user._id));
+  // `mine` comes from the API, which no longer publishes reviewers' userIds.
+  const hasUserReviewed = !!(user && reviews.some((r) => r.mine));
 
   const handleShowReviews = () => setShowAllReviews((v) => !v);
   useEffect(() => {
@@ -140,7 +141,7 @@ const ProductReviews = () => {
                       </p>
                     </div>
 
-                    {user && user._id === r.userId && (
+                    {user && r.mine && (
                       <button onClick={() => deleteProductReview(r._id)} className="text-on-surface-variant hover:text-error transition-colors" title="Delete Review">
                         <span className="material-symbols-outlined text-sm">delete</span>
                       </button>
