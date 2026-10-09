@@ -14,6 +14,14 @@ const router = express.Router();
 // later in the day still registers.
 const VIEW_DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 
+/**
+ * Customer text used in a search is matched literally. It used to be compiled
+ * straight into a regular expression, so typing "(" returned a 500 and a
+ * crafted pattern could make the database backtrack for a long time (B7).
+ * Arrays (?q=a&q=b) are reduced to their first value.
+ */
+const literal = (value) => String(Array.isArray(value) ? value[0] : value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 // Use shared getRates from utils
 
@@ -66,13 +74,13 @@ router.get("/filter", optionalJWT, async (req, res) => {
 
     let query = {};
     if (category && category !== "All" && category !== "undefined") {
-      query.category = { $regex: new RegExp(`^${category}$`, 'i') };
+      query.category = { $regex: new RegExp(`^${literal(category)}$`, 'i') };
     }
 
     if (search && search !== "undefined") {
       query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { category: { $regex: search, $options: 'i' } }
+        { name: { $regex: literal(search), $options: 'i' } },
+        { category: { $regex: literal(search), $options: 'i' } }
       ];
     }
 
@@ -105,7 +113,7 @@ router.get("/", optionalJWT, async (req, res) => {
 
     let query = {};
     if (category && category !== "All") {
-      query.category = { $regex: new RegExp(`^${category}$`, 'i') };
+      query.category = { $regex: new RegExp(`^${literal(category)}$`, 'i') };
     }
 
     let products = await getPriceInjectedProducts(visibleTo(req, query));
@@ -138,8 +146,8 @@ router.get("/search", optionalJWT, async (req, res) => {
 
     const query = {
       $or: [
-        { name: { $regex: q, $options: 'i' } },
-        { category: { $regex: q, $options: 'i' } }
+        { name: { $regex: literal(q), $options: 'i' } },
+        { category: { $regex: literal(q), $options: 'i' } }
       ]
     };
 
