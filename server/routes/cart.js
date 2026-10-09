@@ -106,6 +106,17 @@ router.post("/", verifyJWT, validate(addToCartSchema), async (req, res) => {
   try {
     const { productId, name, img, image, category, price, quantity = 1 } = req.body;
 
+    // Only real products go in a bag. Anything else used to be stored with the
+    // client's name and price and could only fail later, at checkout (B14).
+    const product = await Product.findOne({
+      $or: [{ _id: /^[0-9a-fA-F]{24}$/.test(String(productId)) ? productId : null }, { productId }],
+    })
+      .select("name")
+      .lean();
+    if (!product) {
+      return res.status(404).json({ error: "That piece isn't in our catalogue, so it can't be added to your bag." });
+    }
+
     let cartItem = await Cart.findOne({ userId: req.user.userId, productId });
 
     if (cartItem) {
@@ -122,16 +133,7 @@ router.post("/", verifyJWT, validate(addToCartSchema), async (req, res) => {
     } else {
       // The line needs a name (the model requires it). Clients that omit it
       // used to get a 500 (S9c/d); take the product's own name instead.
-      const lineName =
-        name ||
-        (
-          await Product.findOne({
-            $or: [{ _id: /^[0-9a-fA-F]{24}$/.test(String(productId)) ? productId : null }, { productId }],
-          })
-            .select("name")
-            .lean()
-        )?.name ||
-        String(productId);
+      const lineName = name || product.name;
       cartItem = new Cart({
         productId,
         userId: req.user.userId,

@@ -487,6 +487,8 @@ describe("cart clearing and Buy Now", () => {
   });
 
   it("DELETE /api/orders/delete-cart-items clears only the caller's cart", async () => {
+    // Only catalogue products can be added (B14).
+    await createProduct("a", { productId: "a", name: "A", category: "Gold" });
     const c = await makeCustomer();
     const other = await makeCustomer();
     await addToCart(c.token, "a");

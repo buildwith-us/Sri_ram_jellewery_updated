@@ -639,6 +639,7 @@ describe("B12 · OTP hashes were returned by user endpoints (fixed)", () => {
 
 describe("B13–B14 · cart", () => {
   it("B13: repeated adds cannot push a line past 99", async () => {
+    await createProduct("gold"); // gold-ring; only catalogue products can be added (B14)
     const c = await makeCustomer();
     await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "R", quantity: 60 });
     await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "R", quantity: 60 });
@@ -646,6 +647,7 @@ describe("B13–B14 · cart", () => {
   });
 
   it("B13: the add that would cross 99 is refused with a message and the line is unchanged", async () => {
+    await createProduct("gold"); // gold-ring; only catalogue products can be added (B14)
     const c = await makeCustomer();
     await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "R", quantity: 60 });
     const res = await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "R", quantity: 40 });
@@ -657,7 +659,7 @@ describe("B13–B14 · cart", () => {
     expect((await Cart.findOne({}).lean()).quantity).toBe(99);
   });
 
-  bug("B14: a product that does not exist cannot be added", async () => {
+  it("B14: a product that does not exist cannot be added", async () => {
     const c = await makeCustomer();
     const res = await ctx.api(c.token).post("/api/cart").send({ productId: "ghost", name: "Ghost", price: 1 });
     expect(res.status).toBe(404);

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { useApp } from "../helpers/app.js";
-import { seedCatalog, makeCustomer, makeAdmin, uniquePhone, customerViaOtp, SHIPPING } from "../helpers/factories.js";
+import { seedCatalog, createProduct, makeCustomer, makeAdmin, uniquePhone, customerViaOtp, SHIPPING } from "../helpers/factories.js";
 import { Cart } from "../../server/models/Cart.js";
 import { Wishlist } from "../../server/models/Wishlist.js";
 import { User } from "../../server/models/User.js";
@@ -90,6 +90,9 @@ describe("cart", () => {
   });
 
   it("DELETE by row _id or productId", async () => {
+    // Only catalogue products can be added (B14).
+    await createProduct("a", { productId: "a", name: "A", category: "Gold" });
+    await createProduct("b", { productId: "b", name: "B", category: "Gold" });
     const c = await makeCustomer();
     await add(c.token, { productId: "a" });
     await add(c.token, { productId: "b" });
