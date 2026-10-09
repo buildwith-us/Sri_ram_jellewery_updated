@@ -58,14 +58,18 @@ const useCart = () => {
         quantity,
       };
 
-      axiosSecure.post("/cart", cartProductData).then((res) => {
-        if (res.data?.insertedId || res.data?.success) {
-          toast.success("Cart Updated", {
-            position: "bottom-right",
-          });
-          refetch();
-        }
-      });
+      axiosSecure
+        .post("/cart", cartProductData)
+        .then((res) => {
+          if (res.data?.insertedId || res.data?.success) {
+            toast.success("Cart Updated", {
+              position: "bottom-right",
+            });
+            refetch();
+          }
+        })
+        // e.g. the 99-per-line limit: say why instead of failing silently.
+        .catch((error) => toast.error(error.response?.data?.error || "Could not add this to your bag"));
     }
   };
 

@@ -581,11 +581,23 @@ describe("B12 · OTP hashes were returned by user endpoints (fixed)", () => {
 // ─── B13–B14 · cart ──────────────────────────────────────────────────────────
 
 describe("B13–B14 · cart", () => {
-  bug("B13: repeated adds cannot push a line past 99", async () => {
+  it("B13: repeated adds cannot push a line past 99", async () => {
     const c = await makeCustomer();
     await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "R", quantity: 60 });
     await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "R", quantity: 60 });
     expect((await Cart.findOne({}).lean()).quantity).toBeLessThanOrEqual(99);
+  });
+
+  it("B13: the add that would cross 99 is refused with a message and the line is unchanged", async () => {
+    const c = await makeCustomer();
+    await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "R", quantity: 60 });
+    const res = await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "R", quantity: 40 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/at most 99 .* already have 60/);
+    expect((await Cart.findOne({}).lean()).quantity).toBe(60);
+    // Exactly 99 is fine.
+    expect((await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "R", quantity: 39 })).status).toBe(200);
+    expect((await Cart.findOne({}).lean()).quantity).toBe(99);
   });
 
   bug("B14: a product that does not exist cannot be added", async () => {

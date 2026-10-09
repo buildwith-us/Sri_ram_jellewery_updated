@@ -7,6 +7,9 @@ import { getRates } from "../utils/getRates.js";
 import { validate, addToCartSchema, updateCartItemSchema } from "../middleware/validate.js";
 const router = express.Router();
 
+/** Most of one piece a single bag line may hold — matches the checkout schema. */
+const MAX_LINE_QUANTITY = 99;
+
 // GET /api/cart — user's cart items
 router.get("/", verifyJWT, async (req, res) => {
   try {
@@ -106,6 +109,14 @@ router.post("/", verifyJWT, validate(addToCartSchema), async (req, res) => {
     let cartItem = await Cart.findOne({ userId: req.user.userId, productId });
 
     if (cartItem) {
+      // The same 1–99 bound the request schema enforces, applied to the line's
+      // total: repeated adds used to push one line past it. Refused, never
+      // silently capped — a customer's quantity is never changed for them.
+      if ((cartItem.quantity || 0) + quantity > MAX_LINE_QUANTITY) {
+        return res.status(400).json({
+          error: `You can have at most ${MAX_LINE_QUANTITY} of one piece in your bag (you already have ${cartItem.quantity}).`,
+        });
+      }
       cartItem.quantity += quantity;
       await cartItem.save();
     } else {
