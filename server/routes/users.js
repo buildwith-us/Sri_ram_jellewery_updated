@@ -293,7 +293,7 @@ router.patch("/:id", verifyJWT, requireAdmin, validate(adminUpdateUserSchema), a
     if (req.body.name !== undefined) updates.name = req.body.name;
     if (req.body.role !== undefined) updates.role = req.body.role;
 
-    const user = await User.findByIdAndUpdate(target._id, { $set: updates }, { new: true }).select("-passwordHash");
+    const user = await User.findByIdAndUpdate(target._id, { $set: updates }, { new: true }).select(HIDDEN_USER_FIELDS);
     res.json({ success: true, data: user });
   } catch (error) {
     res.status(500).json({ error: "Failed to update user" });

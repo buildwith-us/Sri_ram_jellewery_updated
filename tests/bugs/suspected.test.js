@@ -122,7 +122,7 @@ describe("S1 · PATCH /api/users/:id passed req.body straight to findByIdAndUpda
     expect((await ctx.api(admin.token).patch(`/api/users/${odd._id}`).send({ role: "ADMIN" })).status).toBe(400);
   });
 
-  bug("S1b: the response never includes otpHash", async () => {
+  it("S1b: the response never includes otpHash", async () => {
     const admin = await makeAdmin();
     const c = await makeCustomer({ otpHash: "$2b$12$secretish" });
     const res = await ctx.api(admin.token).patch(`/api/users/${c.user._id}`).send({ name: "x" });
