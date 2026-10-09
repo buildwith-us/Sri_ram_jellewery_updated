@@ -271,6 +271,24 @@ router.get("/", verifyJWT, requireAdmin, async (req, res) => {
   }
 });
 
+/**
+ * Would changing or removing this account leave the shop with no
+ * administrator who can sign in? Counts only ADMIN accounts with a password —
+ * an admin record without one cannot reach the dashboard.
+ */
+const isLastUsableAdmin = async (target) => {
+  if (target.role !== "ADMIN") return false;
+  const others = await User.countDocuments({
+    _id: { $ne: target._id },
+    role: "ADMIN",
+    passwordHash: { $exists: true, $nin: [null, ""] },
+  });
+  return others === 0;
+};
+
+const LAST_ADMIN_ERROR =
+  "There must always be at least one administrator who can sign in. Make another account an admin first.";
+
 // PATCH /api/users/:id — admin update user
 router.patch("/:id", verifyJWT, requireAdmin, validate(adminUpdateUserSchema), async (req, res) => {
   try {
@@ -287,6 +305,11 @@ router.patch("/:id", verifyJWT, requireAdmin, validate(adminUpdateUserSchema), a
       return res.status(400).json({
         error: "Only accounts that sign in with a password can be administrators. Customer accounts can't be promoted.",
       });
+    }
+
+    // Demoting the last administrator would lock everyone out of the dashboard.
+    if (req.body.role === "USER" && (await isLastUsableAdmin(target))) {
+      return res.status(400).json({ error: LAST_ADMIN_ERROR });
     }
 
     const updates = {};

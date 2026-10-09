@@ -129,11 +129,26 @@ describe("S1 · PATCH /api/users/:id passed req.body straight to findByIdAndUpda
     expect(res.body.data.otpHash).toBeUndefined();
   });
 
-  bug("S1c: the last admin cannot demote themselves", async () => {
+  it("S1c: the last admin cannot demote themselves", async () => {
     const admin = await makeAdmin();
     const res = await ctx.api(admin.token).patch(`/api/users/${admin.user._id}`).send({ role: "USER" });
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect((await User.findById(admin.user._id).lean()).role).toBe("ADMIN");
+  });
+
+  it("S1c: with a second admin who can sign in, demotion is allowed", async () => {
+    const a1 = await makeAdmin();
+    await makeAdmin();
+    const res = await ctx.api(a1.token).patch(`/api/users/${a1.user._id}`).send({ role: "USER" });
+    expect(res.status).toBe(200);
+  });
+
+  it("S1c: a second admin record WITHOUT a password does not count", async () => {
+    const a1 = await makeAdmin();
+    await User.create({ email: "ghost@shop.in", role: "ADMIN" });
+    const res = await ctx.api(a1.token).patch(`/api/users/${a1.user._id}`).send({ role: "USER" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/at least one administrator/);
   });
 
   bug("S1d: the last admin cannot delete themselves", async () => {
