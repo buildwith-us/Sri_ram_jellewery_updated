@@ -408,15 +408,14 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
       await dismissNudge(page);
       await page.getByRole("button", { name: /^price/i }).click();
       const option = page.getByRole("button", { name: /over ₹1l/i });
-      const box = await option.boundingBox();
+      // M1 fixed: every option of the menu is on screen, so it can be tapped.
       const width = page.viewportSize().width;
-      if (box && box.x + box.width > width) {
-        finding(viewport, "Guest browsing", "M1", `Shop "Price" dropdown opens off-screen at ${width}px (option right edge at ${Math.round(box.x + box.width)}px), so it cannot be tapped. Continuing via ?price=over1l.`);
-        await page.screenshot({ path: path.join(OUT, `${viewport}-evidence-price-dropdown-offscreen.png`) });
-        await goto(page, "/shop?price=over1l");
-      } else {
-        await option.click();
+      for (const b of await page.getByRole("button", { name: /^(all|under ₹50k|₹50k - ₹1l|over ₹1l|price on request)$/i }).all()) {
+        const box = await b.boundingBox();
+        if (!box) continue;
+        expectTrue(box.x >= 0 && box.x + box.width <= width, `Price option "${await b.innerText()}" is off-screen at ${width}px (${Math.round(box.x)}–${Math.round(box.x + box.width)}px)`);
       }
+      await option.click();
       await page.waitForURL(/price=over1l/);
       let names = [];
       for (let i = 0; i < 20; i++) {

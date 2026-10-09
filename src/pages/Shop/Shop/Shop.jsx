@@ -134,18 +134,18 @@ const Shop = () => {
 
         {/* Filter Bar */}
         <section className="relative flex flex-col md:flex-row justify-between items-center border-y border-outline-variant/30 py-6 gap-6 bg-surface-container-low/30 px-6">
-          <div
-            className={`flex gap-8 w-full pb-2 md:pb-0 scrollbar-hide ${
-              // The dropdowns are absolutely positioned *below* this row, so a
-              // scroll container clips them away entirely — the menu renders but
-              // is invisible, and the click lands on the backdrop behind it.
-              // Only clip while every menu is closed.
-              openFilter ? '' : 'overflow-x-auto'
-            }`}
-          >
+          {/* On a phone the three triggers don't fit on one line. The row used
+              to scroll sideways, which left Price past the screen edge with
+              its menu opening further off it (M1). It wraps instead, and each
+              menu hangs from the row's left edge (the triggers are only
+              positioning parents from md up), so no menu can leave the
+              screen. A scroll container is avoided on purpose: it would clip
+              the absolutely positioned menus. Stacked above Sort (z-30), which
+              follows it, and below the sticky header (z-40). */}
+          <div className="relative z-[35] flex flex-wrap gap-x-8 gap-y-1 w-full pb-2 md:pb-0">
 
             {/* Metal Filter */}
-            <div className="relative">
+            <div className="md:relative">
               <button
                 onClick={() => toggleFilter('metal')}
                 className="flex items-center gap-4 min-h-11 font-label-caps text-label-caps text-on-surface uppercase tracking-widest hover:text-primary transition-colors"
@@ -162,7 +162,7 @@ const Shop = () => {
             </div>
 
             {/* Category Filter */}
-            <div className="relative">
+            <div className="md:relative">
               <button
                 onClick={() => toggleFilter('category')}
                 className="flex items-center gap-4 min-h-11 font-label-caps text-label-caps text-on-surface uppercase tracking-widest hover:text-primary transition-colors"
@@ -191,7 +191,7 @@ const Shop = () => {
             </div>
 
             {/* Price Filter */}
-            <div className="relative">
+            <div className="md:relative">
               <button
                 onClick={() => toggleFilter('price')}
                 className="flex items-center gap-4 min-h-11 font-label-caps text-label-caps text-on-surface uppercase tracking-widest hover:text-primary transition-colors"
