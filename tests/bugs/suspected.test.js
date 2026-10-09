@@ -237,49 +237,53 @@ describe("S3 · cancelling / rejecting a PAID online order", () => {
 
 // ─── S4 ──────────────────────────────────────────────────────────────────────
 
-describe("S4 · OTP limiters key on the raw req.body.phone", () => {
-  const prodWithSms = () => {
-    setEnv("NODE_ENV", "production");
-    setEnv("MSG91_AUTH_KEY", "k");
-    setEnv("MSG91_TEMPLATE_ID", "t");
-  };
+// Closed by the move to email sign-in: the limiters now key on the normalised
+// address (utils/emailIdentity.js), the same key the account and code use.
+// Phone is no longer a sign-in identity, so the phone spellings are moot.
+describe("S4 · OTP limiters keyed on the raw identity (fixed for email sign-in)", () => {
+  const prod = () => setEnv("NODE_ENV", "production");
+  const n = () => `spell${process.pid}${Math.random().toString(36).slice(2, 7)}`;
+  const spellingsOf = (local) => [
+    `${local}@gmail.com`,
+    `${local.toUpperCase()}@GMAIL.COM`,
+    ` ${local}@gmail.com `,
+    `${local}+x@gmail.com`,
+    `${local.slice(0, 3)}.${local.slice(3)}@gmail.com`,
+    `${local}@googlemail.com`,
+  ];
 
-  bug("S4a: exhausting verify attempts with one spelling also blocks the other spellings", async () => {
-    prodWithSms();
-    const n = uniquePhone();
-    await ctx.api().post("/api/auth/otp/request").send({ phone: n });
-    for (let i = 0; i < 5; i++) await ctx.api().post("/api/auth/otp/verify").send({ phone: n, otp: "000000" });
-    const blocked = await ctx.api().post("/api/auth/otp/verify").send({ phone: n, otp: "000000" });
-    expect(blocked.status).toBe(429);
-    for (const spelling of [`+91${n}`, `0${n}`, `${n.slice(0, 5)} ${n.slice(5)}`, `91${n}`]) {
-      const r = await ctx.api().post("/api/auth/otp/verify").send({ phone: spelling, otp: "000000" });
+  it("S4a: exhausting verify attempts with one spelling also blocks the other spellings", async () => {
+    prod();
+    const local = n();
+    const [first, ...others] = spellingsOf(local);
+    await ctx.api().post("/api/auth/otp/request").send({ email: first });
+    for (let i = 0; i < 5; i++) await ctx.api().post("/api/auth/otp/verify").send({ email: first, otp: "000000" });
+    expect((await ctx.api().post("/api/auth/otp/verify").send({ email: first, otp: "000000" })).status).toBe(429);
+    for (const spelling of others) {
+      const r = await ctx.api().post("/api/auth/otp/verify").send({ email: spelling, otp: "000000" });
       expect(r.status, spelling).toBe(429);
     }
   });
 
-  it("S4a (impact): how many OTP guesses one number gets in one 5-minute window", async () => {
-    prodWithSms();
-    const n = uniquePhone();
-    await ctx.api().post("/api/auth/otp/request").send({ phone: n });
-    // Each of these is a distinct limiter key that normalises to the same account.
-    const spellings = [n, `+91${n}`, `0${n}`, `91${n}`, `0091${n}`, `+91 ${n}`, `${n.slice(0, 5)} ${n.slice(5)}`, `${n.slice(0, 5)}-${n.slice(5)}`, `(${n.slice(0, 5)})${n.slice(5)}`, `${n.slice(0, 3)}.${n.slice(3)}`];
+  it("S4a: one address gets exactly 5 guesses per window, whatever the spelling", async () => {
+    prod();
+    const spellings = spellingsOf(n());
+    await ctx.api().post("/api/auth/otp/request").send({ email: spellings[0] });
     let accepted = 0;
     for (const s of spellings) {
       for (let i = 0; i < 5; i++) {
-        const r = await ctx.api().post("/api/auth/otp/verify").send({ phone: s, otp: String(100000 + accepted) });
+        const r = await ctx.api().post("/api/auth/otp/verify").send({ email: s, otp: "000000" });
         if (r.status === 401) accepted++;
       }
     }
-    // Intended: 5. Actual: 5 per spelling, and spaces/dashes/dots can be put
-    // anywhere, so the real ceiling is apiLimiter (200/min/IP).
-    expect(accepted).toBe(spellings.length * 5);
+    expect(accepted).toBe(5);
   });
 
-  bug("S4b: OTP *requests* are also capped per number across spellings", async () => {
-    prodWithSms();
-    const n = uniquePhone();
-    for (let i = 0; i < 10; i++) await ctx.api().post("/api/auth/otp/request").send({ phone: n });
-    const r = await ctx.api().post("/api/auth/otp/request").send({ phone: `+91${n}` });
+  it("S4b: code *requests* are also capped per address across spellings", async () => {
+    prod();
+    const [first, second] = spellingsOf(n());
+    for (let i = 0; i < 10; i++) await ctx.api().post("/api/auth/otp/request").send({ email: first });
+    const r = await ctx.api().post("/api/auth/otp/request").send({ email: second });
     expect(r.status).toBe(429);
   });
 });

@@ -5,6 +5,7 @@ import { verifyJWT, requireAdmin } from "../middleware/auth.js";
 import mongoose from "mongoose";
 import { validate, updateProfileSchema, changePasswordSchema, shippingAddressSchema } from "../middleware/validate.js";
 import { normalizeIndianPhone } from "../utils/phone.js";
+import { profileStatus } from "../utils/profile.js";
 
 const BCRYPT_SALT_ROUNDS = 12;
 
@@ -28,6 +29,7 @@ router.get("/me", verifyJWT, async (req, res) => {
       data: {
         ...user,
         admin: user.role === "ADMIN",
+        ...profileStatus(user),
       },
     });
   } catch (error) {

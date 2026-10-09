@@ -41,7 +41,10 @@ const mocks = vi.hoisted(() => {
   };
   const MUST_BE_UNSET = [
     "VERCEL_ENV",
+    "TEST_OTP_EMAILS",
     "TEST_OTP_PHONES",
+    "EMAIL_PROVIDER",
+    "EMAIL_REPLY_TO",
     "MSG91_AUTH_KEY",
     "MSG91_TEMPLATE_ID",
     "WHATSAPP_TOKEN",

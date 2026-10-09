@@ -6,18 +6,15 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { useApp } from "../helpers/app.js";
-import { makeAdmin, uniquePhone } from "../helpers/factories.js";
+import { makeAdmin, uniqueEmail } from "../helpers/factories.js";
 
 const ctx = useApp();
 
 const saved = {};
 beforeAll(() => {
-  for (const k of ["NODE_ENV", "MSG91_AUTH_KEY", "MSG91_TEMPLATE_ID"]) saved[k] = process.env[k];
+  for (const k of ["NODE_ENV"]) saved[k] = process.env[k];
+  // Sign-in codes are emailed through the mocked provider — nothing is sent.
   process.env.NODE_ENV = "production";
-  // The test OTP is refused in production, so give OTP requests an SMS channel
-  // (axios is mocked — nothing is sent).
-  process.env.MSG91_AUTH_KEY = "k";
-  process.env.MSG91_TEMPLATE_ID = "t";
 });
 afterAll(() => {
   for (const [k, v] of Object.entries(saved)) {
@@ -54,22 +51,38 @@ describe("authLimiter (10 / 15 min / IP)", () => {
   });
 });
 
-describe("otpLimiter (10 / 5 min / phone)", () => {
-  it("11th OTP request for one number → 429; a different number is unaffected", async () => {
-    const phone = uniquePhone();
-    const statuses = await hammer(11, () => ctx.api().post("/api/auth/otp/request").send({ phone }));
+describe("otpLimiter (10 / 5 min / address)", () => {
+  it("11th code request for one address → 429; a different address is unaffected", async () => {
+    const email = uniqueEmail();
+    const statuses = await hammer(11, () => ctx.api().post("/api/auth/otp/request").send({ email }));
     expect(statuses.slice(0, 10).every((s) => s === 200)).toBe(true);
     expect(statuses[10]).toBe(429);
-    expect((await ctx.api().post("/api/auth/otp/request").send({ phone: uniquePhone() })).status).toBe(200);
+    expect((await ctx.api().post("/api/auth/otp/request").send({ email: uniqueEmail() })).status).toBe(200);
+  });
+
+  it("every spelling of one address shares ONE bucket (dots, +alias, case, whitespace, googlemail)", async () => {
+    const n = `limit${process.pid}`;
+    const spellings = [`${n}@gmail.com`, ` ${n.toUpperCase()}@GMAIL.COM `, `${n.slice(0, 3)}.${n.slice(3)}@gmail.com`, `${n}+a@googlemail.com`, `${n}+b@gmail.com`];
+    const statuses = await hammer(11, (i) => ctx.api().post("/api/auth/otp/request").send({ email: spellings[i % spellings.length] }));
+    expect(statuses.slice(0, 10).every((s) => s === 200)).toBe(true);
+    expect(statuses[10]).toBe(429);
   });
 });
 
-describe("otpVerifyLimiter (5 / 5 min / phone)", () => {
-  it("6th guess for one number → 429", async () => {
-    const phone = uniquePhone();
-    await ctx.api().post("/api/auth/otp/request").send({ phone });
-    const statuses = await hammer(6, () => ctx.api().post("/api/auth/otp/verify").send({ phone, otp: "000000" }));
+describe("otpVerifyLimiter (5 / 5 min / address)", () => {
+  it("6th guess for one address → 429", async () => {
+    const email = uniqueEmail();
+    await ctx.api().post("/api/auth/otp/request").send({ email });
+    const statuses = await hammer(6, () => ctx.api().post("/api/auth/otp/verify").send({ email, otp: "000000" }));
     expect(statuses.slice(0, 5).every((s) => s === 401)).toBe(true);
+    expect(statuses[5]).toBe(429);
+  });
+
+  it("guesses under different spellings of one address share the 5-guess allowance", async () => {
+    const n = `guess${process.pid}`;
+    await ctx.api().post("/api/auth/otp/request").send({ email: `${n}@gmail.com` });
+    const spellings = [`${n}@gmail.com`, `${n}+1@gmail.com`, `${n.toUpperCase()}@googlemail.com`, ` ${n}@gmail.com`, `${n.slice(0, 2)}.${n.slice(2)}@gmail.com`, `${n}+z@gmail.com`];
+    const statuses = await hammer(6, (i) => ctx.api().post("/api/auth/otp/verify").send({ email: spellings[i], otp: "000000" }));
     expect(statuses[5]).toBe(429);
   });
 });

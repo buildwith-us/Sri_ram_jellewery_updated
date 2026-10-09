@@ -5,6 +5,7 @@ import { GoldRate } from "../../server/models/GoldRate.js";
 import { Product } from "../../server/models/Product.js";
 import { User } from "../../server/models/User.js";
 import { Order } from "../../server/models/Order.js";
+import { canonicalEmailKey } from "../../server/utils/emailIdentity.js";
 
 export const RATES = { gold: 7000, silver: 90 };
 const DAY = 24 * 60 * 60 * 1000;
@@ -154,8 +155,16 @@ export const tamperedTokenFor = (user) => {
 export const wrongSecretTokenFor = (user) =>
   jwt.sign({ userId: String(user._id), role: "ADMIN" }, "not-the-server-secret", { expiresIn: "30m" });
 
+let emailCounter = 0;
+/** A sign-in address unique within this process. */
+export const uniqueEmail = (prefix = "shopper") => `${prefix}.${process.pid}.${++emailCounter}@example.com`;
+
+/** A complete customer (signed in by email code, profile filled in). */
 export const makeCustomer = async (overrides = {}) => {
+  const email = overrides.email ?? uniqueEmail();
   const user = await User.create({
+    email,
+    emailKey: canonicalEmailKey(email),
     phone: `+91${uniquePhone()}`,
     name: "Test Customer",
     role: "USER",
@@ -179,13 +188,22 @@ export const makeAdmin = async (overrides = {}) => {
   return { user: user.toObject(), token: tokenFor(user), password: ADMIN_PASSWORD };
 };
 
-/** A customer created by the real OTP endpoints, with the test OTP. */
-export const customerViaOtp = async (api, phone = uniquePhone()) => {
-  const r1 = await api().post("/api/auth/otp/request").send({ phone });
+/** The sign-in code in the most recent email sent to `to` (Resend is mocked). */
+export const lastCodeSentTo = (to) => {
+  const calls = globalThis.__mocks.resendSend.mock.calls.filter(([m]) => [].concat(m.to).includes(to));
+  const text = calls.at(-1)?.[0]?.text || "";
+  return text.match(/sign-in code is (\d{6})/)?.[1] ?? null;
+};
+
+/** A customer signed in through the real email-code endpoints. */
+export const customerViaOtp = async (api, email = uniqueEmail()) => {
+  const r1 = await api().post("/api/auth/otp/request").send({ email });
   if (r1.status !== 200) throw new Error(`otp/request ${r1.status}: ${JSON.stringify(r1.body)}`);
-  const r2 = await api().post("/api/auth/otp/verify").send({ phone, otp: "123456" });
+  const otp = lastCodeSentTo(email);
+  if (!otp) throw new Error(`no sign-in code was emailed to ${email}`);
+  const r2 = await api().post("/api/auth/otp/verify").send({ email, otp });
   if (r2.status !== 200) throw new Error(`otp/verify ${r2.status}: ${JSON.stringify(r2.body)}`);
-  return { phone, ...r2.body, token: r2.body.accessToken };
+  return { email, ...r2.body, token: r2.body.accessToken };
 };
 
 // ─── Orders ──────────────────────────────────────────────────────────────────

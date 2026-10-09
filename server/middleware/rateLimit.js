@@ -1,4 +1,17 @@
 import rateLimit from "express-rate-limit";
+import { normalizeEmail } from "../utils/emailIdentity.js";
+
+/**
+ * The OTP limiters' bucket: the normalised sign-in address, the same key the
+ * account and its code use. Keying on the raw body let each spelling of one
+ * identity have its own allowance (bug S4 — the phone limiters gave
+ * "9876543210" and "+91 98765 43210" separate buckets). Anything that does
+ * not normalise shares one bucket; the route rejects it anyway.
+ */
+const otpBucket = (req) => {
+  const n = normalizeEmail(req.body?.email);
+  return n.ok ? `email:${n.key}` : "invalid-email";
+};
 
 /**
  * Locally every request arrives from the same loopback IP, so ordinary testing
@@ -49,8 +62,7 @@ export const publicFormLimiter = rateLimit({
 });
 
 /**
- * Rate limiter for OTP requests.
- * Max 3 attempts per 5 minutes, keyed by phone number.
+ * Rate limiter for sign-in code requests: 10 per 5 minutes per address.
  */
 export const otpLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
@@ -58,15 +70,13 @@ export const otpLimiter = rateLimit({
   message: { error: "Too many OTP requests. Please wait before trying again." },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => {
-    return req.body?.phone || "unknown-phone";
-  },
+  keyGenerator: otpBucket,
   skip: skipInDevelopment,
 });
 
 /**
- * Rate limiter for OTP verification — throttles brute-force guessing of the
- * 6-digit code, keyed by phone number.
+ * Rate limiter for code verification — throttles brute-force guessing of the
+ * 6-digit code: 5 per 5 minutes per address.
  */
 export const otpVerifyLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
@@ -74,8 +84,6 @@ export const otpVerifyLimiter = rateLimit({
   message: { error: "Too many OTP verification attempts. Please request a new OTP." },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => {
-    return req.body?.phone || "unknown-phone";
-  },
+  keyGenerator: otpBucket,
   skip: skipInDevelopment,
 });

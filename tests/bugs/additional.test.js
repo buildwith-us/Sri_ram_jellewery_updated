@@ -16,6 +16,7 @@ import {
   insertOrder,
   stockOf,
   uniquePhone,
+  uniqueEmail,
   razorpaySignature,
   SHIPPING,
 } from "../helpers/factories.js";
@@ -358,16 +359,12 @@ describe("B8 · /api/payment/verify confirms before it checks ownership", () => 
 // ─── B9–B11 · rate limiting ──────────────────────────────────────────────────
 
 describe("B9–B11 · rate limiting gaps (NODE_ENV=production)", () => {
-  const prod = () => {
-    setEnv("NODE_ENV", "production");
-    setEnv("MSG91_AUTH_KEY", "k");
-    setEnv("MSG91_TEMPLATE_ID", "t");
-  };
+  const prod = () => setEnv("NODE_ENV", "production");
 
-  bug("B9: one IP cannot trigger OTP SMS to an unlimited number of phones", async () => {
+  bug("B9: one IP cannot trigger sign-in emails to an unlimited number of addresses", async () => {
     prod();
     const statuses = [];
-    for (let i = 0; i < 25; i++) statuses.push((await ctx.api().post("/api/auth/otp/request").send({ phone: uniquePhone() })).status);
+    for (let i = 0; i < 25; i++) statuses.push((await ctx.api().post("/api/auth/otp/request").send({ email: uniqueEmail("victim") })).status);
     expect(statuses).toContain(429);
   });
 

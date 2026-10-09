@@ -5,14 +5,14 @@ import crypto from "crypto";
 import { User } from "../models/User.js";
 import { RefreshToken } from "../models/RefreshToken.js";
 import { PasswordResetToken } from "../models/PasswordResetToken.js";
-import { sendEmail, renderEmailLayout, emailButton } from "../utils/email.js";
+import { sendMail, sendEmail, renderEmailLayout, emailButton, canDeliverEmail } from "../utils/email.js";
 import { verifyJWT, JWT_SECRET } from "../middleware/auth.js";
 import { otpLimiter, otpVerifyLimiter, authLimiter } from "../middleware/rateLimit.js";
-import { normalizeIndianPhone } from "../utils/phone.js";
+import { normalizeEmail, canonicalEmailKey } from "../utils/emailIdentity.js";
+import { profileStatus } from "../utils/profile.js";
 // These schemas already existed in middleware/validate.js but were wired to
 // nothing — every auth route hand-rolled its own checks.
 import { validate, registerSchema } from "../middleware/validate.js";
-import axios from "axios";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -35,91 +35,76 @@ const BCRYPT_SALT_ROUNDS = 12;
 // an inbox is not a standing key to the admin dashboard.
 const PASSWORD_RESET_EXPIRY_MS = 45 * 60 * 1000; // 45 minutes
 
-// The fixed OTP that lets any caller sign in as any phone number. It exists so
-// the app is usable while MSG91 is blocked on DLT registration, and it must
-// stay off unless explicitly turned on.
+// How long a sign-in code stays valid.
+const OTP_EXPIRY_MINUTES = 5;
+
+// The one reply /otp/request gives for every address it accepts — known,
+// unknown, or an administrator's. Differing replies would let anyone probe
+// which addresses have accounts, and which belong to the shop's staff.
+const OTP_SENT = { success: true, message: "OTP sent successfully" };
+
+// ─── Test OTP ────────────────────────────────────────────────────────────────
+//
+// A fixed code for named test addresses, so a preview can be demonstrated
+// without a mailbox. Fails CLOSED on every axis:
+//   - only the exact string ALLOW_TEST_OTP="true" turns it on;
+//   - never in a production environment (VERCEL_ENV or NODE_ENV production),
+//     whatever the flag says;
+//   - only for addresses listed in TEST_OTP_EMAILS. An empty or missing list
+//     means NO address gets the fixed code. ("123456 for any address" would
+//     be a free login to every account on any build where the flag is on.)
 const TEST_OTP = "123456";
 
-// Fails CLOSED: only the exact string "true" enables it. A missing, empty or
-// misspelt value — the realistic mistake of forgetting to set it on a server —
-// leaves it off. Deliberately NOT keyed on NODE_ENV: the old code accepted the
-// test OTP whenever MSG91 was unconfigured, which is exactly the production
-// state, so production accepted 123456 for every number.
-//
-// Hard gate: even an explicit ALLOW_TEST_OTP=true cannot enable the bypass on
-// Vercel's *production* environment. Vercel sets VERCEL_ENV to
-// "production" | "preview" | "development", so a variable set at project level
-// — which applies to every environment at once, the realistic way this ships
-// enabled — is still refused in production while continuing to work on preview.
-// This is the difference between a convention and a control.
 const isProductionEnv = () =>
   process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production";
 
-const isTestOtpEnabled = () => {
-  if (process.env.ALLOW_TEST_OTP !== "true") return false;
-  if (isProductionEnv()) return false;
-  return true;
-};
+const isTestOtpEnabled = () => process.env.ALLOW_TEST_OTP === "true" && !isProductionEnv();
 
-/**
- * Optional allowlist, e.g. TEST_OTP_PHONES="9363750806,9876543210".
- *
- * Unset means the bypass applies to every number, which also means every
- * existing customer account can be signed into by anyone who knows the phone
- * number. Setting it confines the bypass to demo handsets, so a shared
- * preview link cannot be used to reach a real account.
- */
-const testOtpPhones = () =>
-  (process.env.TEST_OTP_PHONES || "")
+/** Allowlisted addresses, normalised exactly as sign-in normalises them. */
+const testOtpEmails = () =>
+  (process.env.TEST_OTP_EMAILS || "")
     .split(",")
-    .map((s) => s.trim().replace(/^\+?91/, ""))
+    .map((s) => canonicalEmailKey(s))
     .filter(Boolean);
 
-const isTestOtpAllowedFor = (phone) => {
-  if (!isTestOtpEnabled()) return false;
-  const allowed = testOtpPhones();
-  if (!allowed.length) return true; // no allowlist configured — applies to all
-  return allowed.includes(String(phone).trim().replace(/^\+?91/, ""));
-};
+const isTestOtpAllowedFor = (emailKey) => isTestOtpEnabled() && testOtpEmails().includes(emailKey);
 
-const isSmsConfigured = () =>
-  Boolean(process.env.MSG91_AUTH_KEY && process.env.MSG91_TEMPLATE_ID);
-
-// Announce the bypass loudly at startup so an operator cannot leave it on by
-// accident without seeing it in the logs.
+// Announce the bypass at startup so it cannot be left on unnoticed.
 if (isTestOtpEnabled()) {
-  const scoped = testOtpPhones();
+  const list = testOtpEmails();
   console.warn(
     "\n" +
       "══════════════════════════════════════════════════════════════\n" +
-      "⚠️  AUTHENTICATION BYPASS ACTIVE — ALLOW_TEST_OTP=true\n" +
-      `    The fixed OTP ${TEST_OTP} is accepted for ${
-        scoped.length ? `these numbers only: ${scoped.join(", ")}` : "ALL PHONE NUMBERS"
-      }.\n` +
-      `    Environment: VERCEL_ENV=${process.env.VERCEL_ENV || "unset"} ` +
-      `NODE_ENV=${process.env.NODE_ENV || "unset"}\n` +
-      (scoped.length
-        ? ""
-        : "    Anyone who knows a customer's number can sign in as them.\n" +
-          "    Set TEST_OTP_PHONES to confine it, or unset ALLOW_TEST_OTP.\n") +
+      "⚠️  TEST SIGN-IN CODE ACTIVE — ALLOW_TEST_OTP=true\n" +
+      (list.length
+        ? `    The fixed code ${TEST_OTP} is accepted for: ${list.join(", ")}\n`
+        : "    TEST_OTP_EMAILS is empty, so the fixed code works for NO address.\n") +
+      `    Environment: VERCEL_ENV=${process.env.VERCEL_ENV || "unset"} NODE_ENV=${process.env.NODE_ENV || "unset"}\n` +
       "══════════════════════════════════════════════════════════════\n"
   );
 } else if (process.env.ALLOW_TEST_OTP === "true") {
-  // Asked for, refused. Say so loudly — otherwise someone sets the variable,
-  // sees sign-in fail on production, and assumes the deploy is broken.
   console.warn(
     "⚠️  ALLOW_TEST_OTP=true was set but is REFUSED in a production environment " +
-      `(VERCEL_ENV=${process.env.VERCEL_ENV || "unset"}, NODE_ENV=${process.env.NODE_ENV || "unset"}). ` +
-      "The test OTP is disabled. Configure MSG91 for real delivery."
+      `(VERCEL_ENV=${process.env.VERCEL_ENV || "unset"}, NODE_ENV=${process.env.NODE_ENV || "unset"}).`
   );
 }
 
+// ─── Tokens ──────────────────────────────────────────────────────────────────
+
 /**
- * Generate an access token (short-lived JWT).
+ * Generate an access token (short-lived JWT). `role` defaults to the record's;
+ * the email-code path passes "USER" explicitly so a customer token can never
+ * carry anything else, whatever the record says.
  */
-const generateAccessToken = (user) => {
+const generateAccessToken = (user, { role = user.role } = {}) => {
   return jwt.sign(
-    { userId: user._id.toString(), role: user.role, email: user.email || null, phone: user.phone || null, name: user.name || null },
+    {
+      userId: user._id.toString(),
+      role,
+      email: user.email || user.emailKey || null,
+      phone: user.phone || null,
+      name: user.name || null,
+    },
     JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_EXPIRY }
   );
@@ -161,84 +146,113 @@ const generateRefreshToken = async (userId, role) => {
   return rawToken;
 };
 
+/**
+ * Is this normalised address an administrator's? Compared by canonical key,
+ * so "Owner.Name+x@gmail.com" cannot slip past an exact-string check for an
+ * admin registered as "ownername@gmail.com". There are a handful of admins, so
+ * reading them all is cheap and needs no extra index.
+ */
+const isAdminAddress = async (emailKey) => {
+  const admins = await User.find({ role: "ADMIN" }).select("email").lean();
+  return admins.some((a) => canonicalEmailKey(a.email) === emailKey);
+};
+
+const otpEmailText = (code) =>
+  `Your Sri Ram Jewellery sign-in code is ${code}.\n\n` +
+  `It expires in ${OTP_EXPIRY_MINUTES} minutes and can be used once.\n\n` +
+  "If you did not try to sign in, ignore this email. Nobody can sign in without this code.\n\n" +
+  "— Sri Ram Jewellery";
+
 // ─── POST /api/auth/otp/request ──────────────────────────────────────────────
+//
+// Customers sign in with their email address. Administrators never do: they
+// use email + password at /api/auth/login, and nothing on this path can reach
+// their accounts (see isAdminAddress, the emailKey lookup, and the hard-coded
+// USER role in /otp/verify).
 router.post("/otp/request", otpLimiter, async (req, res) => {
   try {
-    // Normalise BEFORE anything touches the database. The client also
-    // normalises for display, but the server no longer trusts it to: a request
-    // arriving by any other path used to be stored verbatim, which is how one
-    // real number became several accounts.
-    const normalized = normalizeIndianPhone(req.body?.phone);
+    const normalized = normalizeEmail(req.body?.email);
     if (!normalized.ok) {
       return res.status(400).json({ error: normalized.reason });
     }
-    const phone = normalized.phone;
+    const { key: emailKey, display } = normalized;
 
-    const authKey = process.env.MSG91_AUTH_KEY;
-    const templateId = process.env.MSG91_TEMPLATE_ID;
-    const smsConfigured = isSmsConfigured();
-    const testOtp = isTestOtpAllowedFor(phone);
+    const testOtp = isTestOtpAllowedFor(emailKey);
 
-    // Neither a real SMS channel nor the deliberate test bypass: there is no way
-    // to deliver a code, so refuse rather than write an OTP nobody can receive.
-    // The message reveals nothing about whether the number is registered.
-    if (!smsConfigured && !testOtp) {
+    // No way to deliver a code: refuse rather than store one nobody receives.
+    if (!testOtp && !canDeliverEmail()) {
+      console.error("FATAL: sign-in code requested but email is not configured — returning 503.");
       return res.status(503).json({
-        error: "OTP delivery is temporarily unavailable. Please try again later.",
+        error: "Sign-in codes can't be sent right now. Please try again shortly.",
       });
     }
 
-    // Upsert user by phone
-    let user = await User.findOne({ phone });
-
-    // Admins sign in with email and password only. This path mints a token
-    // carrying whatever role the record holds, so an admin with a phone number
-    // set would otherwise be reachable by OTP — and by the test OTP whenever
-    // that is enabled. Answer exactly as for any other number (no OTP is
-    // stored, so nothing can be verified) rather than confirming the number
-    // belongs to an administrator.
-    if (user?.role === "ADMIN") {
-      console.warn(`Refused OTP request for admin account (phone ${phone}) — admins use password sign-in.`);
-      return res.json({ success: true, message: "OTP sent successfully" });
+    // An administrator's address gets the standard reply with nothing stored
+    // and nothing sent.
+    if (await isAdminAddress(emailKey)) {
+      console.warn(`Refused sign-in code for an administrator address (${emailKey}) — admins use password sign-in.`);
+      return res.json(OTP_SENT);
     }
 
-    const otp = smsConfigured
-      ? Math.floor(100000 + Math.random() * 900000).toString()
-      : TEST_OTP;
+    let user = await User.findOne({ emailKey });
 
-    const otpHash = await bcrypt.hash(otp, BCRYPT_SALT_ROUNDS);
-    const otpExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins
+    // Defence in depth: a record found by emailKey must be a customer.
+    if (user && user.role !== "USER") {
+      console.warn(`Refused sign-in code for a non-customer record ${user._id}.`);
+      return res.json(OTP_SENT);
+    }
+
+    const otp = testOtp ? TEST_OTP : crypto.randomInt(100000, 1000000).toString();
 
     if (!user) {
-      user = new User({ phone, role: "USER" });
+      user = new User({ emailKey, role: "USER" });
+      // The display address is stored only when no other record holds that
+      // exact string (a legacy customer may have typed it as an unverified
+      // contact address). The account is keyed by emailKey either way.
+      if (!(await User.exists({ email: display }))) user.email = display;
     }
+    const otpHash = await bcrypt.hash(otp, BCRYPT_SALT_ROUNDS);
+    const otpExpiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
     user.otpHash = otpHash;
     user.otpExpiresAt = otpExpiresAt;
-    await user.save();
-
-    if (smsConfigured) {
-      try {
-        // MSG91 wants the country code without a "+", and an unencoded "+" in a
-        // query string decodes to a space — so passing the canonical form
-        // directly would send MSG91 " 919363750806". Strip and encode.
-        const msg91Mobile = encodeURIComponent(phone.replace(/^\+/, ""));
-        await axios.post(
-          `https://control.msg91.com/api/v5/otp?template_id=${templateId}&mobile=${msg91Mobile}&authkey=${authKey}&otp=${otp}`,
-          {}
-        );
-      } catch (smsError) {
-        console.error("MSG91 Error:", smsError?.response?.data || smsError.message);
-        // The OTP is stored; if delivery failed the user simply cannot verify.
-        // We do not fall back to the test code here.
-      }
-    } else {
-      // Reached only when testOtp is on. Keep it visible in the logs.
-      console.warn(
-        `⚠️  [TEST OTP] MSG91 not configured — accepting fixed OTP for ${phone} because ALLOW_TEST_OTP=true.`
-      );
+    try {
+      await user.save();
+    } catch (saveError) {
+      // Two first requests for the same new address raced and the unique
+      // emailKey index let only one create the account. Use the winner's.
+      if (saveError?.code !== 11000) throw saveError;
+      user = await User.findOne({ emailKey });
+      if (!user || user.role !== "USER") return res.json(OTP_SENT);
+      user.otpHash = otpHash;
+      user.otpExpiresAt = otpExpiresAt;
+      await user.save();
     }
 
-    res.json({ success: true, message: "OTP sent successfully" });
+    if (testOtp) {
+      console.warn(`⚠️  [TEST OTP] fixed code issued for allowlisted ${emailKey} — nothing emailed.`);
+      return res.json(OTP_SENT);
+    }
+
+    const sent = await sendMail({
+      to: display,
+      subject: "Your Sri Ram Jewellery sign-in code",
+      text: otpEmailText(otp),
+      tag: "sign-in-code",
+    });
+
+    if (!sent.ok) {
+      // Never report success for a code that did not leave. The provider's
+      // reason is already logged loudly by sendMail. The stored code is
+      // cleared so it cannot outlive a delivery that never happened.
+      user.otpHash = undefined;
+      user.otpExpiresAt = undefined;
+      await user.save();
+      return res.status(503).json({
+        error: "We couldn't send your sign-in code just now. Please try again in a few minutes.",
+      });
+    }
+
+    res.json(OTP_SENT);
   } catch (error) {
     console.error("OTP Request error:", error);
     res.status(500).json({ error: "Failed to send OTP" });
@@ -248,46 +262,44 @@ router.post("/otp/request", otpLimiter, async (req, res) => {
 // ─── POST /api/auth/otp/verify ───────────────────────────────────────────────
 router.post("/otp/verify", otpVerifyLimiter, async (req, res) => {
   try {
-    const { otp } = req.body;
+    const { otp } = req.body || {};
 
-    // Must normalise here too, and identically. The lookup below is by phone,
-    // so if request stores the canonical form and verify searches for the raw
-    // one, no record is ever found and every sign-in fails with "invalid OTP".
-    const normalized = normalizeIndianPhone(req.body?.phone);
+    // Normalised identically to /otp/request — the lookup is by emailKey.
+    const normalized = normalizeEmail(req.body?.email);
     if (!normalized.ok || !otp) {
-      return res.status(400).json({ error: "Phone number and OTP are required" });
+      return res.status(400).json({ error: "Email address and OTP are required" });
     }
-    const phone = normalized.phone;
+    const { key: emailKey } = normalized;
 
-    const user = await User.findOne({ phone });
-    if (!user || !user.otpHash || !user.otpExpiresAt) {
-      return res.status(401).json({ error: "Invalid OTP or phone number" });
-    }
+    const invalid = () => res.status(401).json({ error: "Invalid OTP or email address" });
 
-    // Second layer: even if a record somehow carries a valid OTP (set before
-    // the account was promoted, or written directly), this path must never
-    // issue an admin token. Same generic message — no confirmation of role.
-    if (user.role === "ADMIN") {
-      console.warn(`Refused OTP verification for admin account (phone ${phone}).`);
-      return res.status(401).json({ error: "Invalid OTP or phone number" });
+    const user = await User.findOne({ emailKey });
+    if (!user || !user.otpHash || !user.otpExpiresAt) return invalid();
+
+    // Only customer records may be signed in with a code — never an
+    // administrator, whether by role on the record or by address.
+    if (user.role !== "USER" || (await isAdminAddress(emailKey))) {
+      console.warn(`Refused code verification for a non-customer record ${user._id}.`);
+      return invalid();
     }
 
     if (Date.now() > user.otpExpiresAt.getTime()) {
       return res.status(401).json({ error: "OTP has expired" });
     }
 
-    const isMatch = await bcrypt.compare(otp, user.otpHash);
+    const isMatch = await bcrypt.compare(String(otp), user.otpHash);
     if (!isMatch) {
       return res.status(401).json({ error: "Invalid OTP" });
     }
 
-    // Success - clear OTP fields
+    // Single use: clear before issuing anything.
     user.otpHash = undefined;
     user.otpExpiresAt = undefined;
     await user.save();
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = await generateRefreshToken(user._id, user.role);
+    // Hard-coded: an email code can only ever produce a customer session.
+    const accessToken = generateAccessToken(user, { role: "USER" });
+    const refreshToken = await generateRefreshToken(user._id, "USER");
 
     res.json({
       success: true,
@@ -296,10 +308,11 @@ router.post("/otp/verify", otpVerifyLimiter, async (req, res) => {
       user: {
         _id: user._id,
         name: user.name,
+        email: user.email || user.emailKey,
         phone: user.phone,
-        email: user.email,
-        role: user.role,
+        role: "USER",
       },
+      ...profileStatus(user),
     });
   } catch (error) {
     console.error("OTP Verify error:", error);
@@ -480,6 +493,15 @@ router.post("/refresh", async (req, res) => {
     if (!user) {
       await RefreshToken.deleteOne({ _id: storedToken._id });
       return res.status(401).json({ error: "User not found" });
+    }
+
+    // An administrator session can only belong to an account that signs in
+    // with a password. A record that was switched to ADMIN without one (an
+    // email-code customer) must not be refreshed into an admin token.
+    if (user.role === "ADMIN" && !user.passwordHash) {
+      await RefreshToken.deleteMany({ userId: user._id });
+      console.warn(`Refused refresh: ADMIN record ${user._id} has no password.`);
+      return res.status(401).json({ error: "Invalid refresh token" });
     }
 
     // Spend this token before minting its replacement. Conditional on usedAt
