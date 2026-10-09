@@ -616,6 +616,14 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
       await page.evaluate(() => (window.__fakeRazorpayMode = "pay"));
       await page.getByRole("button", { name: /with razorpay/i }).click();
       await page.getByText(/payment authorized/i).waitFor({ timeout: 10_000 });
+      // B20: after paying, switching to Cash on Delivery must not be possible —
+      // it used to place a second (COD) order for the same items.
+      // The tile is aria-disabled now, which Playwright refuses to click; a
+      // customer can still tap it, so force the click to do exactly that.
+      await page.getByText("CASH ON DELIVERY", { exact: true }).click({ force: true });
+      await page.getByText(/payment received — your order is placed/i).waitFor({ timeout: 5_000 });
+      const codChecked = await page.locator('input[name="payment"]').nth(2).isChecked();
+      expectTrue(!codChecked, "Cash on Delivery could still be selected after paying");
       const complete = page.getByRole("button", { name: /complete order/i });
       expectTrue(await complete.isEnabled(), "Complete Order still disabled after payment");
       await complete.click();

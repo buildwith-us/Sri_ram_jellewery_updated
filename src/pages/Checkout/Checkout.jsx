@@ -51,6 +51,14 @@ const Checkout = () => {
 
   // Card and UPI are both paid through the existing Razorpay checkout.
   const isOnlineMethod = paymentMethod === "card" || paymentMethod === "upi";
+  // Once Razorpay reports success the server has ALREADY placed the order
+  // (paid, stock reserved, owner alerted). From then on the payment method is
+  // locked and Complete Order only finishes that order — switching to Cash on
+  // Delivery used to post a second order for the same items (bug B20).
+  const isPaid = paymentInfo?.status === "success";
+  const choosePaymentMethod = (method) => {
+    if (!isPaid) setPaymentMethod(method);
+  };
 
   const onlinePaymentBox = (
     <div className="mt-6 pt-6 border-t border-outline-variant/30 px-2" onClick={(e) => e.stopPropagation()}>
@@ -73,13 +81,13 @@ const Checkout = () => {
   const handlePlaceOrder = () => {
     // An unpaid card/UPI checkout must never fall through to POST /api/orders,
     // which places cash-on-delivery orders only.
-    if (isOnlineMethod && paymentInfo?.status !== "success") return;
+    if (isOnlineMethod && !isPaid) return;
     setIsPlacingOrder(true);
-    
-    // For card payments, the order is already created and verified in Payment.jsx.
-    // If we reach here, it means they clicked Complete Order after Razorpay success,
-    // or they are using COD/UPI.
-    if (isOnlineMethod && paymentInfo?.status === "success") {
+
+    // Paid through Razorpay: the order already exists (created and verified in
+    // Payment.jsx). Finish it — whatever tile is highlighted — and never post
+    // another one.
+    if (isPaid) {
       const goToConfirmation = () => {
         navigate("/order-success", {
           state: {
@@ -211,10 +219,16 @@ const Checkout = () => {
 
           <section className="mb-12">
             <h2 className="font-display-lg text-headline-sm mb-8 text-primary">Payment Method</h2>
+            {isPaid && (
+              <p role="status" className="mb-6 p-4 border border-primary/30 bg-surface-container text-on-surface text-sm">
+                Payment received — your order is placed. Select Complete Order to finish; the payment
+                method can no longer be changed.
+              </p>
+            )}
             <div className="space-y-4">
               <label 
                 className={`flex flex-col p-5 bg-white border cursor-pointer hover:border-primary transition-ui group ${paymentMethod === 'card' ? 'border-primary' : 'border-outline-variant'}`}
-                onClick={() => setPaymentMethod('card')}
+                onClick={() => choosePaymentMethod('card')}
               >
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-4">
@@ -236,7 +250,7 @@ const Checkout = () => {
 
               <label 
                 className={`flex flex-col p-5 bg-white border cursor-pointer hover:border-primary transition-ui group ${paymentMethod === 'upi' ? 'border-primary' : 'border-outline-variant'}`}
-                onClick={() => setPaymentMethod('upi')}
+                onClick={() => choosePaymentMethod('upi')}
               >
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-4">
@@ -259,7 +273,8 @@ const Checkout = () => {
 
               <label 
                 className={`flex items-center justify-between p-5 bg-white border cursor-pointer hover:border-primary transition-ui group ${paymentMethod === 'cod' ? 'border-primary' : 'border-outline-variant'}`}
-                onClick={() => setPaymentMethod('cod')}
+                onClick={() => choosePaymentMethod('cod')}
+                aria-disabled={isPaid && paymentMethod !== 'cod'}
               >
                 <div className="flex items-center gap-4">
                   <input 
@@ -287,7 +302,7 @@ const Checkout = () => {
               disabled={
                 // Card and UPI are paid through Razorpay first; Complete Order
                 // only confirms what has already been paid.
-                (isOnlineMethod && paymentInfo?.status !== "success") ||
+                (isOnlineMethod && !isPaid) ||
                 !userFromDB?.shippingAddress ||
                 isPlacingOrder ||
                 !checkoutItems?.length
