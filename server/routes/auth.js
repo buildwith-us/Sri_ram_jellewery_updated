@@ -335,7 +335,10 @@ router.post("/otp/verify", otpVerifyLimiter, async (req, res) => {
 // `validate(registerSchema)` middleware and the explicit role assignment.
 const REGISTRATION_ENABLED = process.env.ALLOW_EMAIL_REGISTRATION === "true";
 
-router.post("/register", authLimiter, validate(registerSchema), async (req, res) => {
+// Rate-limited once, by the app-level authLimiter mounted on this path in
+// server/index.js. It was also listed here, so every attempt counted twice and
+// the limit was effectively halved (bug B11).
+router.post("/register", validate(registerSchema), async (req, res) => {
   if (!REGISTRATION_ENABLED) {
     return res.status(404).json({ error: "Not found" });
   }

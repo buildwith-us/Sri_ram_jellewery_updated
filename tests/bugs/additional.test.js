@@ -382,7 +382,15 @@ describe("B9–B11 · rate limiting gaps (NODE_ENV=production)", () => {
     expect(refresh.status).toBe(200);
   });
 
-  bug("B11: /api/auth/register is counted once per request (it is limited twice)", async () => {
+  it("B11: /api/auth/register is still limited — the 11th attempt from one IP is refused", async () => {
+    prod();
+    const statuses = [];
+    for (let i = 0; i < 11; i++) statuses.push((await ctx.api().post("/api/auth/register").send({ email: `r${i}@x.co`, password: "secret12" })).status);
+    expect(statuses.slice(0, 10)).not.toContain(429);
+    expect(statuses[10]).toBe(429);
+  });
+
+  it("B11: /api/auth/register is counted once per request (it was limited twice)", async () => {
     prod();
     const statuses = [];
     for (let i = 0; i < 6; i++) statuses.push((await ctx.api().post("/api/auth/register").send({ email: `r${i}@x.co`, password: "secret12" })).status);
