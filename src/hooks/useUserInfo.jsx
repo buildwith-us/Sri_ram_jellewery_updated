@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { useQuery } from "react-query";
 import useAuthContext from "./useAuthContext";
 import useAxiosSecure from "./useAxiosSecure";
@@ -6,7 +6,6 @@ import useAxiosSecure from "./useAxiosSecure";
 const useUserInfo = () => {
   const { user, isAuthLoading } = useAuthContext();
   const [axiosSecure] = useAxiosSecure();
-  const [totalSpentArray, setTotalSpentArray] = useState([]);
 
   const hasValidQuery = !isAuthLoading && user !== null && user !== undefined;
 
@@ -25,9 +24,6 @@ const useUserInfo = () => {
 
   const isUserLoading = isAuthLoading || (hasValidQuery && isQueryLoading);
 
-  // Determine admin status from user data
-  const isAdmin = userFromDB?.role === "ADMIN" || user?.role === "ADMIN";
-
   // Attach admin flag for backward compatibility
   const enrichedUser = React.useMemo(() => {
     return userFromDB
@@ -35,19 +31,11 @@ const useUserInfo = () => {
       : null;
   }, [userFromDB]);
 
-  // Fetch total spent amount by users (admin only)
-  useEffect(() => {
-    if (!isAuthLoading && user && isAdmin) {
-      axiosSecure
-        .get("/admin/total-spent")
-        .then((res) => {
-          setTotalSpentArray(res.data);
-        })
-        .catch(() => {});
-    }
-  }, [isAdmin, isAuthLoading, user]);
-
-  return [enrichedUser, isUserLoading, refetch, totalSpentArray];
+  // Per-customer totals used to be fetched here, for every page and every
+  // component using this hook whenever an admin was signed in — about ten
+  // requests per admin page for a figure one page showed. The users list now
+  // carries them (GET /api/users).
+  return [enrichedUser, isUserLoading, refetch];
 };
 
 export default useUserInfo;

@@ -1021,6 +1021,37 @@ const runAdminFlows = async (browser, viewport, shared) => {
       const text = await mine.page.getByText(/expected delivery by/i).first().innerText();
       return text;
     }],
+    ["Users: search by phone, tap-to-call, sort by spend; no sensitive fields", async () => {
+      // Deliver the order approved above, so its customer has spend (B6:
+      // a COD order counts once delivered).
+      const mine = shared[viewport];
+      const token = await adminToken();
+      for (const status of ["shipped", "delivered"]) {
+        const r = await api("PATCH", `/orders/${mine.orderId}/status`, { token, body: { status } });
+        expectTrue(r.status === 200, `mark ${status}: ${r.status} ${JSON.stringify(r.body)}`);
+      }
+      const rows = (await api("GET", "/users", { token })).body;
+      for (const r of rows) {
+        expectTrue(!/otp|password|token|hash/i.test(Object.keys(r).join(" ")), `sensitive field on a row: ${Object.keys(r)}`);
+      }
+      const top = [...rows].sort((a, b) => b.totalSpent - a.totalSpent)[0];
+      const caller = rows.find((r) => r.phone && r.orderCount > 0) || rows.find((r) => r.phone);
+      expectTrue(top && top.totalSpent > 0 && caller, `no customer with spend/phone to check: ${JSON.stringify(rows.map((r) => [r.name, r.orderCount, r.totalSpent]))}`);
+      await goto(page, "/dashboard/adminUsers");
+      const national = caller.phone.replace("+91", "");
+      await page.getByRole("searchbox", { name: /search users/i }).fill(`${national.slice(0, 5)} ${national.slice(5)}`);
+      const call = page.locator(`a[href="tel:${caller.phone}"]:visible`);
+      await call.first().waitFor({ timeout: 8_000 });
+      expectTrue((await call.count()) === 1, `tel link count ${await call.count()}`);
+      const box = await call.first().boundingBox();
+      expectTrue(box && box.height >= 44 && box.x >= 0 && box.x + box.width <= page.viewportSize().width, `call link not tappable: ${JSON.stringify(box)}`);
+      await page.getByRole("searchbox", { name: /search users/i }).fill("");
+      await page.getByRole("combobox", { name: /sort users/i }).selectOption("spent_desc");
+      const firstRow = viewport === "mobile" ? page.locator('ul[aria-label="Users"] > li').first() : page.locator("table tbody tr").first();
+      const spentText = `₹${Number(top.totalSpent).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+      await firstRow.getByText(spentText, { exact: true }).waitFor({ timeout: 5_000 });
+      return `${rows.length} users; top spend ${spentText}`;
+    }],
   ]);
 
   return context;
