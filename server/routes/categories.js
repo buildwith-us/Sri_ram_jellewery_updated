@@ -31,6 +31,10 @@ router.post("/", verifyJWT, requireAdmin, validate(createCategorySchema), async 
     const category = await Category.create(req.body);
     res.status(201).json({ success: true, data: category, insertedId: category._id });
   } catch (error) {
+    // The unique index on categoryName is the guarantee (B16b).
+    if (error?.code === 11000) {
+      return res.status(409).json({ error: "A category with this name already exists" });
+    }
     res.status(500).json({ error: "Failed to create category" });
   }
 });
@@ -48,6 +52,9 @@ router.patch("/:id", verifyJWT, requireAdmin, validate(updateCategorySchema), as
     }
     res.json({ success: true, data: category });
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json({ error: "A category with this name already exists" });
+    }
     res.status(500).json({ error: "Failed to update category" });
   }
 });

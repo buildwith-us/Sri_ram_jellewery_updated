@@ -693,15 +693,33 @@ describe("B15 · password reset token was not claimed atomically (fixed)", () =>
 
 // ─── B16 ─────────────────────────────────────────────────────────────────────
 
-describe("B16 · duplicate keys surface as 500", () => {
-  bug("B16a: duplicate productId → 409", async () => {
+describe("B16 · duplicate keys surfaced as 500 (fixed)", () => {
+  it("B16a: duplicate productId → 409", async () => {
     await seedCatalog();
     const { token } = await makeAdmin();
     const res = await ctx.api(token).post("/api/products").send({ productId: "gold-ring", name: "n", category: "Gold" });
     expect(res.status).toBe(409);
   });
 
-  bug("B16b: duplicate categoryName → 409", async () => {
+  it("B16a: renaming a product to an existing productId → 409, nothing changed", async () => {
+    await seedCatalog();
+    const { token } = await makeAdmin();
+    const res = await ctx.api(token).patch("/api/products/silver-anklet").send({ productId: "gold-ring" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already exists/);
+    expect((await ctx.api().get("/api/products/silver-anklet")).status).toBe(200);
+  });
+
+  it("B16b: renaming a category to an existing name → 409", async () => {
+    const { token } = await makeAdmin();
+    await Category.create({ categoryName: "Gold" });
+    const silver = await Category.create({ categoryName: "Silver" });
+    const res = await ctx.api(token).patch(`/api/categories/${silver._id}`).send({ categoryName: "Gold" });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already exists/);
+  });
+
+  it("B16b: duplicate categoryName → 409", async () => {
     const { token } = await makeAdmin();
     await Category.create({ categoryName: "Gold" });
     const res = await ctx.api(token).post("/api/categories").send({ categoryName: "Gold" });

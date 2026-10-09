@@ -248,6 +248,10 @@ router.post("/", verifyJWT, requireAdmin, validate(createProductSchema), async (
     const product = await Product.create(productData);
     res.status(201).json({ success: true, data: product });
   } catch (error) {
+    // The unique index on productId is the guarantee; say what clashed (B16a).
+    if (error?.code === 11000) {
+      return res.status(409).json({ error: "A product with this product ID already exists" });
+    }
     console.error("Create product error:", error);
     res.status(500).json({ error: "Failed to create product" });
   }
@@ -272,6 +276,9 @@ router.patch("/:id", verifyJWT, requireAdmin, validate(updateProductSchema), asy
     }
     res.json({ success: true, data: product });
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json({ error: "A product with this product ID already exists" });
+    }
     res.status(500).json({ error: "Failed to update product" });
   }
 });
