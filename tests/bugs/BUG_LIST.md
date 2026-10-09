@@ -12,4 +12,4 @@ file holds the ones logged without a test yet.
 
 Not bugs yet; written down so a recurrence can be recognised.
 
-- **E2E sign-out (2026-10-10)** — once, in the full E2E run straight after a failed Shop Price step (during the M1 fix), four later mobile flows failed because the customer had been signed out (`wishlist has undefined`, `cart.some is not a function`, `/dashboard/adminDashboard` ending on `/login`). No 429s in the API log. It did not happen in the next three full runs; not investigated.
+- **E2E sign-out (2026-10-10)** — explained, fixed in the harness: four later mobile flows failed with the customer signed out. Cause: the API's general limit (200 requests / min / IP, deliberately on in development) — the whole E2E run came from one loopback IP, so a busy stretch tripped it; a refused refresh signs the customer out. Recurred as the suite grew; each E2E browser context now has its own client IP (as real shoppers do) and the run reports any 429 it meets.

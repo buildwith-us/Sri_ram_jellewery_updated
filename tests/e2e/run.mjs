@@ -133,16 +133,40 @@ const expectTrue = (cond, msg) => {
 
 // ─── API helpers (Node side, not the browser) ────────────────────────────────
 
+// Every 429 the run meets, from the pages and from api(). The API's general
+// limit is per IP and the whole run comes from one; a failure that follows
+// these is the limiter, not the app.
+const rateLimited = [];
+
+// The API's general limit (200 / min / IP, on even in development) is per
+// client IP, and the server trusts one proxy hop. Every context in this run
+// stands for a different shopper, so each gets its own address, as real
+// customers have; one loopback IP doing the work of dozens of shoppers in a
+// few minutes used to trip the limit mid-run and sign customers out.
+let ipSeq = 0;
+const nextClientIp = () => {
+  ipSeq += 1;
+  return `10.${(ipSeq >> 16) & 255}.${(ipSeq >> 8) & 255}.${ipSeq & 255}`;
+};
+let runnerIp = nextClientIp();
+let runnerCalls = 0;
+const noteRateLimit = (where, url) => {
+  if (rateLimited.length < 200) rateLimited.push({ where, path: new URL(url).pathname, at: new Date().toISOString().slice(11, 19) });
+};
+
 const api = async (method, p, { token, body } = {}) => {
+  // The runner's own calls rotate address every 100, for the same reason.
+  if (++runnerCalls % 100 === 0) runnerIp = nextClientIp();
   const r = await fetch(`${API}${p}`, {
     method,
     headers: {
       "Content-Type": "application/json",
+      "X-Forwarded-For": runnerIp,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-
+  if (r.status === 429) noteRateLimit("test", `${API}${p}`);
   const text = await r.text();
   let json;
   try {
@@ -206,6 +230,7 @@ const newContext = async (browser, viewport, { timer = false } = {}) => {
     isMobile: viewport === "mobile",
     hasTouch: viewport === "mobile",
     deviceScaleFactor: 1,
+    extraHTTPHeaders: { "X-Forwarded-For": nextClientIp() },
   });
   if (!timer) {
     await context.addInitScript((key) => {
@@ -235,6 +260,9 @@ const newContext = async (browser, viewport, { timer = false } = {}) => {
 };
 
 const attachConsole = (page, viewport) => {
+  page.on("response", (res) => {
+    if (res.status() === 429) noteRateLimit(viewport, res.url());
+  });
   page.on("console", (msg) => {
     if (msg.type() !== "error") return;
     const text = msg.text();
@@ -1138,6 +1166,10 @@ const main = async () => {
   }
   const overflowing = [...overflow].filter(([, v]) => v);
   console.log(`\n  390px pages checked: ${overflow.size}; scrolling sideways: ${overflowing.length}`);
+  console.log(
+    `  rate-limited (429) responses: ${rateLimited.length}` +
+      (rateLimited.length ? ` — first at ${rateLimited[0].at} on ${rateLimited[0].path} (${rateLimited[0].where})` : "")
+  );
   for (const [p, v] of overflowing) console.log(`    ${p}: scrollWidth ${v.scrollWidth}px — ${v.culprits.join(" | ")}`);
   console.log(`\n  console errors on ${Object.keys(errorsByPage).length} page(s); blocked external hosts: ${[...blockedRequests.keys()].join(", ") || "none"}`);
   console.log(`  details: ${path.relative(ROOT, path.join(OUT, "results.json"))}\n`);
