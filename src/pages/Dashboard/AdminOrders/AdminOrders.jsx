@@ -31,6 +31,7 @@ const AdminOrders = () => {
   });
 
   const { incomeStats } = useAdminStats();
+  const refundsOwed = (allOrders || []).filter((o) => o.refundRequired);
 
   const handleStatusChange = (selectedOption, orderId) => {
     axiosSecure.patch(`/orders/${orderId}/status`, {
@@ -110,6 +111,28 @@ const AdminOrders = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-4 md:p-margin-desktop custom-scrollbar">
+        {/* Refunds owed: first thing on the page, never only inside a row on
+            some later page of the table. Set when a PAID order is cancelled or
+            declined, or paid after its reservation expired. Refunds are made
+            by hand in the Razorpay dashboard. */}
+        {refundsOwed.length > 0 && (
+          <div role="status" className="mb-8 p-4 md:p-5 rounded-xl border border-error/30 bg-error-container text-on-error-container">
+            <p className="font-semibold flex items-center gap-2">
+              <span className="material-symbols-outlined text-[20px]" aria-hidden="true">currency_rupee</span>
+              {refundsOwed.length === 1 ? "1 paid order needs a refund" : `${refundsOwed.length} paid orders need a refund`}
+            </p>
+            <ul className="mt-2 text-sm space-y-1">
+              {refundsOwed.map((o) => (
+                <li key={o._id}>
+                  <span className="font-semibold">{o.orderId}</span> — ₹{Number(o.totalAmount || 0).toLocaleString("en-IN")}
+                  {o.name ? ` · ${o.name}` : ""}
+                  {o.razorpayPaymentId ? ` · payment ${o.razorpayPaymentId}` : ""}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs">Refund each one by hand from the Razorpay dashboard. Nothing is refunded automatically.</p>
+          </div>
+        )}
         {/* Chart Section */}
         <div className="bg-surface-dim border border-secondary/20 rounded-xl p-4 md:p-6 mb-8 h-auto">
           <h3 className="font-headline-sm text-primary mb-4 font-display">Revenue Trend</h3>
@@ -166,6 +189,11 @@ const AdminOrders = () => {
                         <span className="text-[11px] text-outline">
                           {order.paymentMethod === "cod" ? "COD" : (order.razorpayPaymentId || order.paymentMethod)}
                         </span>
+                        {order.refundRequired && (
+                          <span className="inline-block px-2 py-0.5 rounded text-[11px] font-semibold uppercase tracking-wider w-fit border bg-error-container text-on-error-container border-error/30">
+                            Refund needed
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-6 py-4">

@@ -25,9 +25,16 @@ const MyOrders = () => {
         confirmButtonText: "Ok, take me back",
       });
     } else {
+      // A paid online order is refunded by hand by the shop — say so before
+      // the customer commits, and never promise an instant refund.
+      const paidOnline = Boolean(order.paidAt) && String(order.paymentMethod || "").toLowerCase() !== "cod";
+      const amount = `₹${Number(order.totalAmount || 0).toLocaleString("en-IN")}`;
+      const refundNote = paidOnline
+        ? `<br><br>You paid ${amount} online. The shop refunds it to your original payment method <b>by hand</b>; once issued, a refund usually reaches you within <b>5–7 working days</b>. It is not instant.`
+        : "";
       Swal.fire({
         title: "Cancel Order?",
-        html: `Your order will be cancelled. Check out our <a href="#" target="_blank" class="underline text-primary">refund policy</a>`,
+        html: `Your order will be cancelled.${refundNote}<br><br>See our <a href="/legal/cancellation-policy" target="_blank" class="underline text-primary">cancellation policy</a>.`,
         icon: "warning",
         showCancelButton: true,
         confirmButtonColor: "#8B6447",
@@ -40,8 +47,10 @@ const MyOrders = () => {
             .then((res) => {
               if (res.data.success) {
                 Swal.fire({
-                  title: "Cancelled!",
-                  text: "Your order has been cancelled successfully",
+                  title: "Cancelled",
+                  text: paidOnline
+                    ? `Your order has been cancelled. Your refund of ${amount} is pending: the shop will issue it by hand, and it usually reaches you within 5–7 working days after that.`
+                    : "Your order has been cancelled successfully",
                   icon: "success",
                   confirmButtonColor: "#8B6447",
                 });
@@ -132,7 +141,13 @@ const MyOrders = () => {
             // A delivered order with no deliveredAt is legacy data, deliberately
             // not backfilled — show a dash rather than inventing today's date.
             let timelineText;
-            if (isDelivered) {
+            if (order.refundRequired) {
+              // Honest about what happens next: nothing has been refunded yet,
+              // and the shop does it by hand. Never shown as "Refunded".
+              timelineText =
+                `Cancelled — refund pending. The shop will refund ₹${Number(order.totalAmount || 0).toLocaleString("en-IN")} ` +
+                "to your original payment method by hand. Once it's issued, it usually reaches you within 5–7 working days.";
+            } else if (isDelivered) {
               timelineText = `Delivered on ${deliveredOn || "—"}`;
             } else if (isRejected) {
               timelineText = order.rejectionReason

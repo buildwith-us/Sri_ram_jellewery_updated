@@ -122,22 +122,24 @@ export const sendOrderAlert = async ({ order }) => {
  * which would then cost them a real sale alert. This is the opposite case: the
  * shop is holding a customer's money with nothing to ship.
  */
-export const sendRefundRequiredAlert = async ({ order, product }) => {
+export const sendRefundRequiredAlert = async ({ order, product, reason }) => {
   const customer = order.name || "Customer";
   const mobile =
     order.shippingAddress?.mobileNumber || order.shippingAddress?.number || order.phone || "—";
+  // Why the money has to go back. The default is the original case: a payment
+  // that arrived after its reservation expired, for a piece that sold out.
+  const why =
+    reason ||
+    `Payment of ${formatAmount(order.totalAmount)} arrived after the reservation expired, and ${product} had already sold out.`;
 
   return dispatch(
     `🚨 REFUND NEEDED — ${order.orderId}\n\n` +
       `${customer}\n` +
       `${mobile}\n\n` +
-      `Payment of ${formatAmount(order.totalAmount)} arrived after the reservation ` +
-      `expired, and ${product} had already sold out.\n\n` +
-      `The money is with us and there is nothing to ship. Please refund this customer.\n\n` +
+      `${why}\n\n` +
+      `The money is with us and there is nothing to ship. Please refund ${formatAmount(order.totalAmount)} to this customer.\n\n` +
       `${ADMIN_BASE_URL}/dashboard/adminOrders`,
-    `REFUND NEEDED for ${order.orderId} — ${customer} (${mobile}) paid ${formatAmount(
-      order.totalAmount
-    )} but ${product} is out of stock`
+    `REFUND NEEDED for ${order.orderId} — ${customer} (${mobile}) paid ${formatAmount(order.totalAmount)}. ${why}`
   );
 };
 

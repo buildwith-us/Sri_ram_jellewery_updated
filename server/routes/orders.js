@@ -6,7 +6,7 @@ import { Product } from "../models/Product.js";
 import { computePrice } from "../utils/computePrice.js";
 import { getRateStatus, findUnpriceableMetalsForProducts, rateUnavailableMessage } from "../utils/getRates.js";
 import { verifyJWT, requireAdmin } from "../middleware/auth.js";
-import { sendOrderAlert, sendOrderApprovalAlert } from "../utils/whatsapp.js";
+import { sendOrderAlert, sendOrderApprovalAlert, sendRefundRequiredAlert } from "../utils/whatsapp.js";
 import { reserveStock, releaseStock, outOfStockMessage } from "../utils/stock.js";
 import { checkStatusChange, checkApprove, checkReject } from "../utils/orderStatus.js";
 import {
@@ -17,6 +17,22 @@ import {
 } from "../middleware/validate.js";
 
 const router = express.Router();
+
+/**
+ * A paid online order that will not be fulfilled — cancelled by the customer
+ * or the owner, or rejected — holds the customer's money with nothing to ship.
+ * Flag it for a refund (made by hand; there is no automatic Razorpay refund)
+ * and tell the owner with the same REFUND NEEDED alert the late-payment case
+ * uses. Call before saving the order.
+ */
+const flagRefundIfPaid = (order, reason) => {
+  const paidOnline = order.paidAt && String(order.paymentMethod || "").toLowerCase() !== "cod";
+  if (!paidOnline || order.refundRequired) return;
+  order.refundRequired = true;
+  sendRefundRequiredAlert({ order, reason }).catch((err) =>
+    console.error("Refund alert failed (non-critical):", err.message)
+  );
+};
 
 // How long after the owner approves an order it is promised for delivery.
 // Single source of truth — the client displays this date, it never computes it.
@@ -241,6 +257,7 @@ router.patch("/:id/status", verifyJWT, requireAdmin, validate(orderStatusSchema)
       await releaseStock(order.items);
       order.stockReserved = false;
     }
+    if (status === "cancelled") flagRefundIfPaid(order, "The shop cancelled this paid order.");
 
     // Stamped once, on the first transition into delivered, so re-saving a
     // delivered order does not move the date the customer was shown.
@@ -293,6 +310,7 @@ router.patch("/:id/approval", verifyJWT, requireAdmin, validate(orderApprovalSch
         await releaseStock(order.items);
         order.stockReserved = false;
       }
+      flagRefundIfPaid(order, `The shop declined this paid order: ${order.rejectionReason || "no reason given"}.`);
     }
 
     await order.save();
@@ -328,6 +346,7 @@ router.patch("/:id/cancel", verifyJWT, async (req, res) => {
     }
 
     order.orderStatus = "cancelled";
+    flagRefundIfPaid(order, "The customer cancelled this paid order.");
 
     // Put the pieces back on sale. Guarded by the flag rather than by status
     // alone: cancellation and owner rejection are separate fields, so without

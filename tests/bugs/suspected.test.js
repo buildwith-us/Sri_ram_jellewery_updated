@@ -234,7 +234,7 @@ describe("S2 · POST /api/orders accepted any paymentMethod (fixed)", () => {
 
 // ─── S3 ──────────────────────────────────────────────────────────────────────
 
-describe("S3 · cancelling / rejecting a PAID online order", () => {
+describe("S3 · cancelling / rejecting a PAID online order (fixed)", () => {
   const paidOrder = async () => {
     await seedCatalog();
     const c = await makeCustomer();
@@ -255,13 +255,13 @@ describe("S3 · cancelling / rejecting a PAID online order", () => {
     expect(await stockOf("gold-ring")).toBe(5);
   });
 
-  bug("S3a: customer cancel of a paid order sets refundRequired", async () => {
+  it("S3a: customer cancel of a paid order sets refundRequired", async () => {
     const { c, orderId } = await paidOrder();
     await ctx.api(c.token).patch(`/api/orders/${orderId}/cancel`);
     expect((await Order.findById(orderId).lean()).refundRequired).toBe(true);
   });
 
-  bug("S3b: customer cancel of a paid order alerts the owner", async () => {
+  it("S3b: customer cancel of a paid order alerts the owner", async () => {
     const { c, orderId } = await paidOrder();
     await ctx.api(c.token).patch(`/api/orders/${orderId}/cancel`);
     const w = mocks().whatsapp;
@@ -269,7 +269,36 @@ describe("S3 · cancelling / rejecting a PAID online order", () => {
     expect(alerted).toBeGreaterThan(0);
   });
 
-  bug("S3c: owner rejecting a paid order sets refundRequired", async () => {
+  it("S3: the alert is the REFUND NEEDED one, says why, and is sent once", async () => {
+    const { c, orderId } = await paidOrder();
+    await ctx.api(c.token).patch(`/api/orders/${orderId}/cancel`);
+    const calls = mocks().whatsapp.sendRefundRequiredAlert.mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0].reason).toMatch(/customer cancelled this paid order/);
+    expect(calls[0][0].order.refundRequired).toBe(true);
+  });
+
+  it("S3: admin cancelling a paid order from the status menu flags it too", async () => {
+    const { orderId } = await paidOrder();
+    const admin = await makeAdmin();
+    await ctx.api(admin.token).patch(`/api/orders/${orderId}/status`).send({ status: "cancelled" });
+    expect((await Order.findById(orderId).lean()).refundRequired).toBe(true);
+    expect(mocks().whatsapp.sendRefundRequiredAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("S3: COD and unpaid online orders are never flagged", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const admin = await makeAdmin();
+    const cod = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring" }], paymentMethod: "cod" });
+    await ctx.api(c.token).patch(`/api/orders/${cod.body.data._id}/cancel`);
+    const unpaid = await ctx.api(c.token).post("/api/payment/create-order").send({ items: [{ productId: "silver-anklet" }], shippingAddress: SHIPPING });
+    await ctx.api(admin.token).patch(`/api/orders/${unpaid.body.orderId}/status`).send({ status: "cancelled" });
+    expect(await Order.countDocuments({ refundRequired: true })).toBe(0);
+    expect(mocks().whatsapp.sendRefundRequiredAlert).not.toHaveBeenCalled();
+  });
+
+  it("S3c: owner rejecting a paid order sets refundRequired", async () => {
     const { orderId } = await paidOrder();
     const admin = await makeAdmin();
     await ctx.api(admin.token).patch(`/api/orders/${orderId}/approval`).send({ approvalStatus: "REJECTED", rejectionReason: "No stock" });
