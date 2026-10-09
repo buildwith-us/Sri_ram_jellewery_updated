@@ -78,17 +78,28 @@ const Wishlist = () => {
               {wishlistData.map((item) => {
                 const productDetails = getProductDetails(item.productId);
                 const isQuoteOnly = productDetails.isQuoteOnly;
+                // The server marks saved pieces the owner has switched off or
+                // removed. They stay here, but say so plainly instead of
+                // linking to a page that no longer exists.
+                const unavailable = item.available === false;
+                const productLink = (children) =>
+                  unavailable ? children : <Link to={`/products/${item.productId}/description`}>{children}</Link>;
                 
                 return (
                   <div key={item._id} className="group relative flex flex-col h-full bg-surface-container border border-sand/30 overflow-hidden transition-ui duration-500 hover:shadow-[0_20px_40px_-10px_rgba(139,100,71,0.08)] hover:border-primary-container/60 hover:-translate-y-1">
                     <div className="aspect-[4/5] overflow-hidden relative">
-                      <Link to={`/products/${item.productId}/description`}>
+                      {productLink(
                         <img
                           src={item.img}
                           alt={item.name}
-                          className="w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-110"
+                          className={`w-full h-full object-cover transition-transform duration-700 ease-out group-hover:scale-110 ${unavailable ? "opacity-50 grayscale" : ""}`}
                         />
-                      </Link>
+                      )}
+                      {unavailable && (
+                        <span className="absolute left-4 top-4 px-3 py-1 bg-inverse-surface text-inverse-on-surface font-label-caps text-[10px] uppercase tracking-widest">
+                          No longer available
+                        </span>
+                      )}
                       <button
                         className="absolute top-4 right-4 z-10 w-10 h-10 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center text-primary transition-ui duration-300 hover:bg-white hover:scale-110 cursor-pointer"
                         onClick={() => handleDeleteFromWishlist(item._id)}
@@ -102,22 +113,26 @@ const Wishlist = () => {
                       <span className="font-label-caps text-[10px] text-on-surface-variant uppercase mb-1">
                         {productDetails.category || "Collection"}
                       </span>
-                      <Link to={`/products/${item.productId}/description`}>
+                      {productLink(
                         <h3 className="font-headline-sm text-headline-sm text-primary mb-1 hover:text-secondary line-clamp-1">{item.name}</h3>
-                      </Link>
+                      )}
                       
                       <p className="font-body-base text-sm text-on-surface-variant mb-4">
                         {productDetails.carate ? `${productDetails.carate}K Gold` : " "}
                       </p>
                       
-                      {!isQuoteOnly && (
+                      {!isQuoteOnly && !unavailable && (
                         <p className="font-headline-sm text-primary mt-auto mb-6">
                           ₹{item.discountPrice || item.price}
                         </p>
                       )}
 
                       <div className="space-y-3 mt-auto">
-                        {isQuoteOnly ? (
+                        {unavailable ? (
+                          <p className="w-full py-3 border border-outline-variant text-on-surface-variant font-button-text text-button-text uppercase" role="note">
+                            This piece is no longer available
+                          </p>
+                        ) : isQuoteOnly ? (
                           <Link to={`/products/${item.productId}/description`} className="block w-full">
                             <button className="w-full py-3 border border-outline-variant text-primary font-button-text text-button-text hover:bg-surface-variant transition-colors cursor-pointer uppercase">
                               GET QUOTE

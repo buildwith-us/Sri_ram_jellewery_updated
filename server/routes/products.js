@@ -46,6 +46,11 @@ const withLivePrice = (product, rateMap) => {
   return product;
 };
 
+// Inactive products (the admin "active" toggle) are hidden from customers but
+// still listed for administrators, who need to see them to switch them back on.
+const isAdminRequest = (req) => req.user?.role === "ADMIN";
+const visibleTo = (req, query = {}) => (isAdminRequest(req) ? query : { ...query, isActive: { $ne: false } });
+
 const getPriceInjectedProducts = async (query = {}) => {
   const products = await Product.find(query).lean();
   const rateMap = await getRates();
@@ -55,7 +60,7 @@ const getPriceInjectedProducts = async (query = {}) => {
 // ─── Public Reads (JWT required per PRD) ─────────────────────────────────────
 
 // GET /api/products/filter?category=...&minPrice=...&maxPrice=...
-router.get("/filter", async (req, res) => {
+router.get("/filter", optionalJWT, async (req, res) => {
   try {
     const { category, minPrice = 0, maxPrice = 1000000, priceOrder, search } = req.query;
 
@@ -71,7 +76,7 @@ router.get("/filter", async (req, res) => {
       ];
     }
 
-    let products = await getPriceInjectedProducts(query);
+    let products = await getPriceInjectedProducts(visibleTo(req, query));
 
     if (minPrice) {
       products = products.filter(p => (p.price || 0) >= Number(minPrice));
@@ -94,7 +99,7 @@ router.get("/filter", async (req, res) => {
 });
 
 // GET /api/products or /api/products?category=Rings&page=1
-router.get("/", async (req, res) => {
+router.get("/", optionalJWT, async (req, res) => {
   try {
     const { category, sort, page = 1 } = req.query;
 
@@ -103,7 +108,7 @@ router.get("/", async (req, res) => {
       query.category = { $regex: new RegExp(`^${category}$`, 'i') };
     }
 
-    let products = await getPriceInjectedProducts(query);
+    let products = await getPriceInjectedProducts(visibleTo(req, query));
 
     if (sort === "low-to-high") {
       products.sort((a, b) => (a.price || 0) - (b.price || 0));
@@ -123,11 +128,11 @@ router.get("/", async (req, res) => {
 });
 
 // GET /api/products/search?q=diamond
-router.get("/search", async (req, res) => {
+router.get("/search", optionalJWT, async (req, res) => {
   try {
     const { q } = req.query;
     if (!q) {
-      const products = await getPriceInjectedProducts();
+      const products = await getPriceInjectedProducts(visibleTo(req));
       return res.json({ success: true, data: products });
     }
 
@@ -138,7 +143,7 @@ router.get("/search", async (req, res) => {
       ]
     };
 
-    const matched = await getPriceInjectedProducts(query);
+    const matched = await getPriceInjectedProducts(visibleTo(req, query));
     res.json({ success: true, data: matched });
   } catch (error) {
     res.status(500).json({ error: "Failed to search products" });
@@ -146,14 +151,16 @@ router.get("/search", async (req, res) => {
 });
 
 // GET /api/products/:id
-router.get("/:id", async (req, res) => {
+router.get("/:id", optionalJWT, async (req, res) => {
   try {
-    const product = await Product.findOne({
-      $or: [
-        { _id: req.params.id.match(/^[0-9a-fA-F]{24}$/) ? req.params.id : null },
-        { productId: req.params.id }
-      ].filter(Boolean)
-    }).lean();
+    const product = await Product.findOne(
+      visibleTo(req, {
+        $or: [
+          { _id: req.params.id.match(/^[0-9a-fA-F]{24}$/) ? req.params.id : null },
+          { productId: req.params.id }
+        ].filter(Boolean)
+      })
+    ).lean();
 
     if (!product) {
       return res.status(404).json({ success: false, error: "Product not found" });

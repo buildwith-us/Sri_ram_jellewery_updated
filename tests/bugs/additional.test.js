@@ -337,20 +337,78 @@ describe("B4 · products accepted negative weight / stock / price (fixed for new
 
 // ─── B5 ──────────────────────────────────────────────────────────────────────
 
-describe("B5 · inactive products are still listed and orderable", () => {
-  bug("B5a: GET /api/products hides isActive:false products", async () => {
+describe("B5 · inactive products were still listed and orderable (fixed)", () => {
+  const inactiveRing = async () => {
     await seedRates();
     await createProduct("gold", { isActive: false });
+  };
+
+  it("B5a: GET /api/products hides isActive:false products", async () => {
+    await inactiveRing();
     const res = await ctx.api().get("/api/products");
     expect(res.body.data.map((p) => p.productId)).not.toContain("gold-ring");
   });
 
-  bug("B5b: an inactive product cannot be ordered", async () => {
-    await seedRates();
-    await createProduct("gold", { isActive: false });
+  it("B5a: search and filter hide them too, for guests and customers", async () => {
+    await inactiveRing();
+    const c = await makeCustomer();
+    for (const [who, url] of [[null, "/api/products/search?q=ring"], [c.token, "/api/products/search"], [null, "/api/products/filter"]]) {
+      const res = await ctx.api(who).get(url);
+      const list = res.body.data ?? res.body;
+      expect(list.map((p) => p.productId), url).not.toContain("gold-ring");
+    }
+  });
+
+  it("B5a: the product page is a 404 for customers, but admins still see it (to switch it back on)", async () => {
+    await inactiveRing();
+    const c = await makeCustomer();
+    const admin = await makeAdmin();
+    expect((await ctx.api().get("/api/products/gold-ring")).status).toBe(404);
+    expect((await ctx.api(c.token).get("/api/products/gold-ring")).status).toBe(404);
+    expect((await ctx.api(admin.token).get("/api/products/gold-ring")).status).toBe(200);
+    const list = (await ctx.api(admin.token).get("/api/products")).body.data;
+    expect(list.find((p) => p.productId === "gold-ring")).toMatchObject({ isActive: false });
+  });
+
+  it("B5b: an inactive product cannot be ordered", async () => {
+    await inactiveRing();
     const c = await makeCustomer();
     const res = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring" }], paymentMethod: "cod" });
     expect(res.status).toBe(400);
+  });
+
+  it("B5b: a bag or Buy Now holding it is refused on both routes, naming the piece, and nothing is reserved", async () => {
+    await inactiveRing();
+    const c = await makeCustomer();
+    const cod = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring" }], paymentMethod: "cod", buyNow: true });
+    const card = await createPayment(c.token, { items: [{ productId: "gold-ring" }] });
+    for (const res of [cod, card]) {
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("Gold Ring is no longer available. Please remove it from your order.");
+    }
+    expect(await stockOf("gold-ring")).toBe(5);
+    expect(mocks().razorpayCreate).not.toHaveBeenCalled();
+  });
+
+  it("B5: it stays in wishlists, visibly marked unavailable (deleted products too)", async () => {
+    await inactiveRing();
+    await createProduct("silver");
+    const c = await makeCustomer();
+    for (const productId of ["gold-ring", "silver-anklet", "deleted-piece"]) {
+      await ctx.api(c.token).post("/api/wishlist").send({ productId, name: productId });
+    }
+    const wl = (await ctx.api(c.token).get("/api/wishlist")).body;
+    const by = Object.fromEntries(wl.map((w) => [w.productId, w.available]));
+    expect(by).toEqual({ "gold-ring": false, "silver-anklet": true, "deleted-piece": false });
+  });
+
+  it("B5: switching it back on makes it visible and orderable again", async () => {
+    await inactiveRing();
+    const admin = await makeAdmin();
+    const c = await makeCustomer();
+    await ctx.api(admin.token).patch("/api/products/gold-ring").send({ isActive: true });
+    expect((await ctx.api().get("/api/products/gold-ring")).status).toBe(200);
+    expect((await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring" }], paymentMethod: "cod" })).status).toBe(201);
   });
 });
 

@@ -94,6 +94,11 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
         return res.status(400).json({ error: `Quote-only products cannot be purchased: ${product.name}` });
       }
 
+      // Switched off by the owner: not for sale, even from an old bag or tab.
+      if (product.isActive === false) {
+        return res.status(400).json({ error: `${product.name} is no longer available. Please remove it from your order.` });
+      }
+
       const priceData = computePrice(product, rateMap);
       // Never fall back to the stored `price` for a weighted product: that field
       // is the making charge, not the customer price. The rate check above

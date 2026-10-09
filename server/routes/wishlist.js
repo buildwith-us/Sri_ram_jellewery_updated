@@ -1,5 +1,6 @@
 import express from "express";
 import { Wishlist } from "../models/Wishlist.js";
+import { Product } from "../models/Product.js";
 import { verifyJWT } from "../middleware/auth.js";
 import { validate, addToWishlistSchema } from "../middleware/validate.js";
 
@@ -9,7 +10,25 @@ const router = express.Router();
 router.get("/", verifyJWT, async (req, res) => {
   try {
     const userWishlist = await Wishlist.find({ userId: req.user.userId }).lean();
-    res.json(userWishlist);
+
+    // Saved pieces stay in the wishlist even if the owner switches them off
+    // or deletes them — but each says whether it can still be bought, so the
+    // page can show "no longer available" instead of a link to a 404.
+    const ids = userWishlist.map((i) => i.productId);
+    const objectIds = ids.filter((id) => /^[0-9a-fA-F]{24}$/.test(String(id)));
+    const products = ids.length
+      ? await Product.find({ $or: [{ productId: { $in: ids } }, { _id: { $in: objectIds } }] })
+          .select("productId isActive")
+          .lean()
+      : [];
+    const live = new Set();
+    for (const p of products) {
+      if (p.isActive === false) continue;
+      live.add(String(p.productId));
+      live.add(String(p._id));
+    }
+
+    res.json(userWishlist.map((item) => ({ ...item, available: live.has(String(item.productId)) })));
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch wishlist" });
   }
