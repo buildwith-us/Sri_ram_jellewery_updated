@@ -90,7 +90,9 @@ describe("product reads inject the live price", () => {
     expect(res.body).toMatchObject({ success: true, totalPages: 1, currentPage: 1 });
     const by = Object.fromEntries(res.body.data.map((p) => [p.productId, p]));
     expect(by["gold-ring"].price).toBe(80752);
-    expect(by["gold-ring"].priceBreakdown).toEqual({ metalValue: 70000, wastageValue: 8400, gst: 2352, ratePerGram: 7000 });
+    expect(by["gold-ring"].priceBreakdown).toEqual({ metalValue: 70000, wastageValue: 8400, discount: 0, gst: 2352, ratePerGram: 7000 });
+    expect(by["gold-ring"]).toMatchObject({ originalPrice: 80752, discountPercent: 0, storedPrice: 999 });
+    expect(by["gold-ring"].discountPrice).toBeUndefined();
     expect(by["silver-anklet"].price).toBe(5099);
     expect(by["gift-box"].price).toBe(1500);
     expect(by["diamond-set"].priceBreakdown).toBeUndefined();
@@ -138,7 +140,8 @@ describe("product reads inject the live price", () => {
     await seedRates();
     await createProduct("gold", { discountPercentage: 10 });
     const res = await ctx.api().get("/api/products/gold-ring");
-    expect(res.body.data.discountPrice).toBeCloseTo(80752 * 0.9, 5);
+    // computePrice applies it (B2): rounded to the rupee, and it IS the price.
+    expect(res.body.data).toMatchObject({ price: 72677, discountPrice: 72677, originalPrice: 80752, discountPercent: 10 });
   });
 });
 

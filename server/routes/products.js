@@ -17,21 +17,39 @@ const VIEW_DEDUPE_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 // Use shared getRates from utils
 
+/**
+ * Attach the live price to a product read for display. Every figure comes
+ * from computePrice — the same call checkout makes — so the page can never
+ * show a price that checkout does not charge.
+ *
+ *   price          what checkout charges (after any discount, GST included)
+ *   originalPrice  before the discount
+ *   discountPrice  calculated, never stored: equals `price` when a discount
+ *                  applies, absent otherwise. (A legacy stored discountPrice
+ *                  is ignored.)
+ *   storedPrice    the raw stored `price` field — the making charge, or a
+ *                  weightless piece's own price — so the admin edit form
+ *                  edits what is stored, not the computed customer price.
+ */
+const withLivePrice = (product, rateMap) => {
+  const storedPrice = product.price ?? null;
+  delete product.discountPrice;
+  const priceData = computePrice(product, rateMap);
+  product.storedPrice = storedPrice;
+  if (priceData !== undefined) {
+    product.price = priceData.finalPrice;
+    product.originalPrice = priceData.originalPrice;
+    product.discountPercent = priceData.discountPercent;
+    product.priceBreakdown = priceData.priceBreakdown;
+    if (priceData.discountPercent > 0) product.discountPrice = priceData.finalPrice;
+  }
+  return product;
+};
+
 const getPriceInjectedProducts = async (query = {}) => {
   const products = await Product.find(query).lean();
   const rateMap = await getRates();
-
-  return products.map(product => {
-    const priceData = computePrice(product, rateMap);
-    if (priceData !== undefined) {
-      product.price = priceData.finalPrice;
-      product.priceBreakdown = priceData.priceBreakdown;
-      if (product.discountPercentage) {
-        product.discountPrice = priceData.finalPrice - (priceData.finalPrice * (product.discountPercentage / 100));
-      }
-    }
-    return product;
-  });
+  return products.map((product) => withLivePrice(product, rateMap));
 };
 
 // ─── Public Reads (JWT required per PRD) ─────────────────────────────────────
@@ -141,15 +159,7 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ success: false, error: "Product not found" });
     }
 
-    const rateMap = await getRates();
-    const priceData = computePrice(product, rateMap);
-    if (priceData !== undefined) {
-      product.price = priceData.finalPrice;
-      product.priceBreakdown = priceData.priceBreakdown;
-      if (product.discountPercentage) {
-        product.discountPrice = priceData.finalPrice - (priceData.finalPrice * (product.discountPercentage / 100));
-      }
-    }
+    withLivePrice(product, await getRates());
 
     res.json({ success: true, data: product });
   } catch (error) {

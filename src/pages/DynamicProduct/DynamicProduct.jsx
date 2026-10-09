@@ -198,7 +198,12 @@ const DynamicProduct = () => {
     );
   }
 
-  const finalPrice = dynamicProduct.discountPrice || dynamicProduct.price;
+  // `price` is what checkout charges (the server applies any discount in
+  // computePrice). Rounded for display only as a guard: never "₹72,668.72".
+  const rawPrice = dynamicProduct.discountPrice || dynamicProduct.price;
+  const finalPrice = typeof rawPrice === "number" ? Math.round(rawPrice) : rawPrice;
+  const discountPercent = dynamicProduct.discountPercent || 0;
+  const rupee = (n) => `₹ ${Math.round(Number(n) || 0).toLocaleString("en-IN")}`;
 
   // Field names must match what computePrice actually returns — metalValue,
   // wastageValue, gst, ratePerGram. Reading materialCost/makingCharges (which
@@ -325,6 +330,12 @@ const DynamicProduct = () => {
                           </span>
                           <span className="font-semibold">₹ {(breakdown.wastageValue ?? 0).toLocaleString("en-IN")}</span>
                         </div>
+                        {breakdown.discount > 0 && (
+                          <div className="flex justify-between items-center">
+                            <span className="text-on-surface-variant font-body-base">Discount ({discountPercent}%)</span>
+                            <span className="font-semibold">− {rupee(breakdown.discount)}</span>
+                          </div>
+                        )}
                         <div className="flex justify-between items-center">
                           <span className="text-on-surface-variant font-body-base">
                             GST{gstPercent ? ` (${gstPercent}%)` : ""}
@@ -333,14 +344,22 @@ const DynamicProduct = () => {
                         </div>
                       </>
                     ) : (
-                      <div className="flex justify-between items-center">
-                        <span className="text-on-surface-variant font-body-base">Base Price</span>
-                        <span className="font-semibold">₹ {finalPrice?.toLocaleString("en-IN") || 0}</span>
-                      </div>
+                      <>
+                        <div className="flex justify-between items-center">
+                          <span className="text-on-surface-variant font-body-base">Base Price</span>
+                          <span className="font-semibold">{rupee(dynamicProduct.originalPrice ?? finalPrice)}</span>
+                        </div>
+                        {discountPercent > 0 && (
+                          <div className="flex justify-between items-center">
+                            <span className="text-on-surface-variant font-body-base">Discount ({discountPercent}%)</span>
+                            <span className="font-semibold">− {rupee((dynamicProduct.originalPrice || 0) - (finalPrice || 0))}</span>
+                          </div>
+                        )}
+                      </>
                     )}
                     <div className="pt-6 mt-6 border-t border-primary/20 flex justify-between items-center">
                       <span className="font-display-lg text-headline-sm text-primary uppercase">Net Payable</span>
-                      <span className="font-display-lg text-headline-sm text-primary">₹ {finalPrice?.toLocaleString("en-IN") || 0}</span>
+                      <span className="font-display-lg text-headline-sm text-primary">{rupee(finalPrice)}</span>
                     </div>
                   </div>
                 </div>

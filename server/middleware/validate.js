@@ -74,7 +74,10 @@ export const createProductSchema = z.object({
   wastagePercent: optionalPercent,
   gstPercent: optionalPercent,
   price: z.coerce.number().min(0, "Price cannot be negative").nullish(),
-  discountPrice: optionalNumber,
+  // Calculated by computePrice from discountPercentage, never stored: a
+  // stored figure went stale with the metal rate and drifted from checkout.
+  discountPrice: z.unknown().transform(() => undefined).optional(),
+  // The discount, as a percentage of the whole piece, applied before GST.
   discountPercentage: optionalPercent,
   stock: z.coerce.number().int("Stock must be a whole number").min(0, "Stock cannot be negative").nullish(),
   carate: optionalNumber,

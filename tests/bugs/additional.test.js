@@ -124,16 +124,77 @@ describe("B1 · /api/payment/create-order did not validate items or quantity (fi
 
 // ─── B2 ──────────────────────────────────────────────────────────────────────
 
-describe("B2 · the discount the product page shows is not what checkout charges", () => {
-  bug("B2: charged unit price equals the price the product page displays", async () => {
+describe("B2 · the discount the product page showed was not what checkout charged (fixed)", () => {
+  const page = async (id) => (await ctx.api().get(`/api/products/${id}`)).body.data;
+  const rows = (b) => b.metalValue + b.wastageValue - b.discount + b.gst;
+
+  it("B2: charged unit price equals the price the product page displays", async () => {
     await seedRates();
     await createProduct("gold", { discountPercentage: 10 });
     const c = await makeCustomer();
-    const page = (await ctx.api().get("/api/products/gold-ring")).body.data;
+    const shown = await page("gold-ring");
     // DynamicProduct.jsx: `const finalPrice = dynamicProduct.discountPrice || dynamicProduct.price`
-    const shown = page.discountPrice || page.price;
+    const displayed = shown.discountPrice || shown.price;
     const order = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring" }], paymentMethod: "cod" });
-    expect(order.body.data.items[0].unitPrice).toBe(Math.round(shown));
+    expect(order.body.data.items[0].unitPrice).toBe(displayed);
+    expect(displayed).toBe(72677);
+  });
+
+  it.each([
+    ["discounted", { discountPercentage: 10 }],
+    ["undiscounted", {}],
+    ["undiscounted, where rounding each row drifted by ₹1", { weight: 1.02, wastagePercent: 8 }],
+  ])("B2: the page's breakdown rows sum to what BOTH checkout routes charge — %s", async (_label, over) => {
+    await seedRates({ gold: 7001 });
+    await createProduct("gold", over);
+    const c = await makeCustomer();
+    const shown = await page("gold-ring");
+    expect(rows(shown.priceBreakdown)).toBe(shown.price);
+    const cod = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring", quantity: 2 }], paymentMethod: "cod" });
+    expect(cod.body.data.totalAmount).toBe(shown.price * 2);
+    expect(cod.body.data.gstAmount).toBe(shown.priceBreakdown.gst * 2);
+    const card = await createPayment(c.token, { items: [{ productId: "gold-ring" }] });
+    expect(card.body.amount).toBe(shown.price);
+  });
+
+  it("B2: the cart charges the discounted price too", async () => {
+    await seedRates();
+    await createProduct("gold", { discountPercentage: 10 });
+    const c = await makeCustomer();
+    await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring", name: "Gold Ring" });
+    expect((await ctx.api(c.token).get("/api/cart")).body[0].price).toBe(72677);
+  });
+
+  it("B2: discountPrice is calculated, never stored; a legacy stored value is ignored", async () => {
+    const { token } = await makeAdmin();
+    const res = await ctx.api(token).post("/api/products").send({ name: "Bangle", category: "Gold", weight: 10, discountPercentage: 10, discountPrice: 5 });
+    expect(res.status).toBe(201);
+    const { Product } = await import("../../server/models/Product.js");
+    expect((await Product.findById(res.body.data._id).lean()).discountPrice).toBeUndefined();
+    await seedRates();
+    await createProduct("gold", { discountPrice: 899 }); // legacy making-charge-scale figure, no %
+    const shown = await page("gold-ring");
+    expect(shown.discountPrice).toBeUndefined();
+    expect(shown.price).toBe(80752);
+  });
+
+  it("B2: the response carries the stored making charge, so an admin edit cannot overwrite it", async () => {
+    await seedRates();
+    await createProduct("gold", { price: 999 });
+    const shown = await page("gold-ring");
+    expect(shown.storedPrice).toBe(999);
+    expect(shown.price).toBe(80752);
+  });
+
+  it("B2: a weightless piece saved with a blank (null) or 0 price is refused at checkout, never sold for nothing", async () => {
+    await seedRates();
+    const c = await makeCustomer();
+    for (const price of [null, 0]) {
+      await createProduct("weightless", { productId: `box-${price}`, price });
+      const res = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: `box-${price}` }], paymentMethod: "cod" });
+      expect(res.status, String(price)).toBe(400);
+      expect(res.body.error).toMatch(/no price set/);
+    }
   });
 });
 

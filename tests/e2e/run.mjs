@@ -747,6 +747,9 @@ const runAdminFlows = async (browser, viewport, shared) => {
       await page.locator('[name="wastagePercent"]').fill("10");
       await page.locator('[name="gstPercent"]').fill("3");
       await page.locator('[name="stock"]').fill("2");
+      // B2: a discount must show in the preview and match what the API charges.
+      await page.locator('[name="discountPercentage"]').fill("10");
+      await page.getByText(/discount \(10%\)/i).first().waitFor({ timeout: 5_000 });
       await page.locator('select[name="category"]').selectOption({ label: "Gold" });
       await page.locator('input[type="file"]').setInputFiles({ name: "e2e.png", mimeType: "image/png", buffer: PNG_1PX });
       const text = await page.getByText(/customer price/i).locator("xpath=../..").innerText();

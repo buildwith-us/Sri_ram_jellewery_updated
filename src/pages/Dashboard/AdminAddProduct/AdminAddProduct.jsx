@@ -53,6 +53,7 @@ const AdminAddProduct = () => {
   const wastageValue = watch("wastagePercent");
   const gstValue = watch("gstPercent");
   const metalTypeValue = watch("metalType");
+  const discountValue = watch("discountPercentage");
   const { rates } = useRates();
 
   // default tag options for badges list
@@ -82,8 +83,10 @@ const AdminAddProduct = () => {
       defaultValues.name = dynamicProduct.name || "";
       defaultValues.description = dynamicProduct.details?.description || "";
       defaultValues.advantages = dynamicProduct.details?.advantages?.join(", ") || "";
-      defaultValues.price = dynamicProduct.price || 0;
-      defaultValues.discountPrice = dynamicProduct.discountPrice || null;
+      // The STORED making charge, not the computed customer price the list
+      // shows — editing used to save the customer price over the making charge.
+      defaultValues.price = dynamicProduct.storedPrice ?? "";
+      defaultValues.discountPercentage = dynamicProduct.discountPercentage ?? "";
       defaultValues.weight = dynamicProduct.weight || "";
       defaultValues.wastagePercent = dynamicProduct.wastagePercent || "";
       defaultValues.gstPercent = dynamicProduct.gstPercent || "";
@@ -127,16 +130,18 @@ const AdminAddProduct = () => {
         description: data.description,
         advantages: data.advantages ? data.advantages.split(",").map((a) => a.trim()).filter(Boolean) : [],
       },
-      price: parseFloat(data.price) || 0,
+      // Blank stays blank (null), never 0: a weightless piece saved at ₹0
+      // would have sold for nothing.
+      price: data.price === "" || data.price == null ? null : parseFloat(data.price),
       weight: parseFloat(data.weight) || 0,
       wastagePercent: parseFloat(data.wastagePercent) || 0,
       gstPercent: parseFloat(data.gstPercent) || 0,
       metalType: data.metalType || "gold",
       isQuoteOnly: data.isQuoteOnly || false,
-      discountPrice: parseFloat(data.discountPrice) || null,
-      discountPercentage: data.discountPrice
-        ? (((data.price - data.discountPrice) / data.price) * 100).toFixed(2)
-        : null,
+      // A plain percentage of the whole piece, applied before GST by
+      // computePrice. The discounted price is calculated, never stored.
+      discountPercentage:
+        data.discountPercentage === "" || data.discountPercentage == null ? null : parseFloat(data.discountPercentage),
       size: data.size || "",
       stock: parseInt(data.stock) || 0,
       carate: data.carate ? parseInt(data.carate) : null,
@@ -408,6 +413,7 @@ const AdminAddProduct = () => {
                       wastagePercent={wastageValue}
                       gstPercent={gstValue}
                       metalType={metalTypeValue}
+                      discountPercentage={discountValue}
                       rates={rates}
                     />
 
@@ -422,17 +428,28 @@ const AdminAddProduct = () => {
                       />
                     </div>
 
-                    {/* Discount price input */}
+                    {/* Discount % — of the whole piece, before GST */}
                     <div className="mt-8 px-6">
                       <div className="auth-input-con">
-                        <p className="text-outline font-label-caps tracking-[0.1em] text-xs uppercase">Discount Price</p>
+                        <label htmlFor="discountPercentage" className="text-outline font-label-caps tracking-[0.1em] text-xs uppercase">
+                          Discount %
+                        </label>
                         <input
+                          id="discountPercentage"
                           type="number"
                           step="0.01"
-                          {...register("discountPrice")}
+                          min="0"
+                          max="100"
+                          {...register("discountPercentage", { min: 0, max: 100 })}
                           className="w-full bg-transparent border-0 border-b border-outline-variant py-3 px-0 focus:ring-0 text-on-surface placeholder:text-on-surface-variant/30 transition-ui duration-300 outline-none focus:border-primary"
-                          placeholder="if available"
+                          placeholder="e.g. 10 — leave blank for none"
                         />
+                        {errors.discountPercentage && (
+                          <span className="text-error mt-1 block">Discount must be between 0 and 100</span>
+                        )}
+                        <p className="text-[11px] text-on-surface-variant mt-1">
+                          Taken off the whole piece before GST. The preview above shows what the customer pays.
+                        </p>
                       </div>
                     </div>
                   </>

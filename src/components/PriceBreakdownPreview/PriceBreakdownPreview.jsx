@@ -15,7 +15,7 @@ const money = (n) => `₹${Math.round(Number(n) || 0).toLocaleString("en-IN")}`;
  * at ₹1.2 crore without anyone noticing. Showing the computed figure as it is
  * typed makes an order-of-magnitude mistake visible at the point it is made.
  */
-const PriceBreakdownPreview = ({ weight, wastagePercent, gstPercent, metalType, rates }) => {
+const PriceBreakdownPreview = ({ weight, wastagePercent, gstPercent, metalType, discountPercentage, rates }) => {
   const metal = metalType || "gold";
   const rate = rates?.[metal]?.ratePerGram;
   const isStale = rates?.[metal]?.isStale;
@@ -53,6 +53,7 @@ const PriceBreakdownPreview = ({ weight, wastagePercent, gstPercent, metalType, 
       wastagePercent: Number(wastagePercent) || 0,
       gstPercent: Number(gstPercent) || 0,
       metalType: metal,
+      discountPercentage: Number(discountPercentage) || 0,
       isQuoteOnly: false,
     },
     { [metal]: rate }
@@ -93,6 +94,12 @@ const PriceBreakdownPreview = ({ weight, wastagePercent, gstPercent, metalType, 
             <dt className="text-on-surface-variant">Wastage ({Number(wastagePercent) || 0}%)</dt>
             <dd className="text-on-surface">{money(b.wastageValue)}</dd>
           </div>
+          {b.discount > 0 && (
+            <div className="flex justify-between">
+              <dt className="text-on-surface-variant">Discount ({result.discountPercent}%)</dt>
+              <dd className="text-on-surface">− {money(b.discount)}</dd>
+            </div>
+          )}
           <div className="flex justify-between">
             <dt className="text-on-surface-variant">GST ({Number(gstPercent) || 0}%)</dt>
             <dd className="text-on-surface">{money(b.gst)}</dd>

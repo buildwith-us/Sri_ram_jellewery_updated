@@ -103,15 +103,21 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
       // A weightless product sells at its stored price. Without one there is
       // nothing to charge — this used to reach the database as NaN and 500.
       const serverPrice = priceData?.finalPrice;
-      if (!Number.isFinite(serverPrice)) {
+      // For a weightless piece a stored price of 0 is no price either: a blank
+      // admin field used to save as 0, which would have sold it for nothing.
+      // (Weighted pieces are untouched here — see B4-residual.)
+      if (!Number.isFinite(serverPrice) || (!product.weight && serverPrice <= 0)) {
         return res.status(400).json({ error: `${product.name} cannot be ordered right now — it has no price set.` });
       }
       const quantity = item.quantity || 1;
       totalAmount += serverPrice * quantity;
 
       const gstPercent = product.gstPercent || 0;
-      const priceBeforeGst = serverPrice / (1 + gstPercent / 100);
-      gstAmount += (serverPrice - priceBeforeGst) * quantity;
+      // The GST row the customer was shown (see orders.js).
+      const unitGst = priceData.priceBreakdown
+        ? priceData.priceBreakdown.gst
+        : serverPrice - serverPrice / (1 + gstPercent / 100);
+      gstAmount += unitGst * quantity;
 
       verifiedItems.push({
         productId: product.productId || product._id.toString(),
