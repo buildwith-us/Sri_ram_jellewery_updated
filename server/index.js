@@ -18,7 +18,7 @@ import contactRouter from "./routes/contact.js";
 import newsletterRouter from "./routes/newsletter.js";
 import cronRouter from "./routes/cron.js";
 import connectDB from "./db/connect.js";
-import { apiLimiter, authLimiter } from "./middleware/rateLimit.js";
+import { apiLimiter, authLimiter, refreshLimiter } from "./middleware/rateLimit.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -86,7 +86,7 @@ app.use((req, res, next) => {
 // ─── Rate Limiting ───────────────────────────────────────────────────────────
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/register", authLimiter);
-app.use("/api/auth/refresh", authLimiter);
+app.use("/api/auth/refresh", refreshLimiter); // not authLimiter: see B10
 app.use("/api", apiLimiter);
 
 // ─── API Routes ──────────────────────────────────────────────────────────────

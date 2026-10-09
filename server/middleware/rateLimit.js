@@ -35,6 +35,25 @@ export const authLimiter = rateLimit({
 });
 
 /**
+ * Token refresh: its own bucket, 60 per 15 minutes per IP.
+ *
+ * It used to share authLimiter with login, so ten failed sign-ins from one IP
+ * — an office, a household, a mobile carrier's shared address — blocked every
+ * customer behind that IP from refreshing, which signs them out (bug B10).
+ * Refresh needs a valid single-use token, so it is not a guessing surface; the
+ * cap only bounds abuse. 60 leaves room for several shoppers on one connection,
+ * each refreshing once per 30-minute access token.
+ */
+export const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { error: "Too many session refreshes. Please try again in a few minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInDevelopment,
+});
+
+/**
  * General API rate limiter.
  * 200 requests per minute per IP.
  */

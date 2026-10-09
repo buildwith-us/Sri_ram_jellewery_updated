@@ -368,7 +368,21 @@ describe("B9–B11 · rate limiting gaps (NODE_ENV=production)", () => {
     expect(statuses).toContain(429);
   });
 
-  bug("B10: failed admin logins from an IP do not block customers' silent token refresh from that IP", async () => {
+  it("B10: refresh still has its own limit — the 61st refresh attempt from one IP is refused", async () => {
+    prod();
+    const statuses = [];
+    for (let i = 0; i < 61; i++) statuses.push((await ctx.api().post("/api/auth/refresh").send({ refreshToken: "f".repeat(80) })).status);
+    expect(statuses.slice(0, 60)).not.toContain(429);
+    expect(statuses[60]).toBe(429);
+  });
+
+  it("B10: refresh attempts do not use up the login allowance either", async () => {
+    prod();
+    for (let i = 0; i < 15; i++) await ctx.api().post("/api/auth/refresh").send({ refreshToken: "f".repeat(80) });
+    expect((await ctx.api().post("/api/auth/login").send({ email: "x@y.co", password: "bad" })).status).toBe(401);
+  });
+
+  it("B10: failed admin logins from an IP do not block customers' silent token refresh from that IP", async () => {
     prod();
     const phone = uniquePhone();
     await User.create({ phone: `+91${phone}`, role: "USER" });
