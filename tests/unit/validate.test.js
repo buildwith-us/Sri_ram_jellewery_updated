@@ -80,9 +80,14 @@ describe("schemas", () => {
     expect(parse(S.createProductSchema, { name: "n", category: "c", metalType: "platinum" }).success).toBe(false);
   });
 
-  it("product: z.coerce.boolean turns the string 'false' into true (see bug report)", () => {
-    const r = parse(S.createProductSchema, { name: "n", category: "c", isQuoteOnly: "false" });
-    expect(r.data.isQuoteOnly).toBe(true);
+  it("booleans: the string 'false' is false, not true (B17)", () => {
+    const q = (v) => parse(S.createProductSchema, { name: "n", category: "c", isQuoteOnly: v });
+    for (const v of [false, "false", "FALSE", "0", 0, "no", "off", ""]) expect(q(v).data.isQuoteOnly, JSON.stringify(v)).toBe(false);
+    for (const v of [true, "true", "True", "1", 1, "yes", "on"]) expect(q(v).data.isQuoteOnly, JSON.stringify(v)).toBe(true);
+    expect(q(null).data.isQuoteOnly).toBeNull();
+    for (const v of ["maybe", 2, {}]) expect(q(v).success, JSON.stringify(v)).toBe(false);
+    expect(parse(S.createOrderSchema, { items: [{ productId: "p" }], buyNow: "false" }).data.buyNow).toBe(false);
+    expect(parse(S.quoteRequestSchema, { productId: "p", customerName: "a", customerMobile: "9876543210", isQuoteOnly: "false" }).data.isQuoteOnly).toBe(false);
   });
 
   it("product: weight, price and stock cannot be negative; stock is whole (B4)", () => {

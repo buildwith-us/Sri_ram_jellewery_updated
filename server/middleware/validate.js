@@ -55,6 +55,24 @@ export const refreshSchema = z.object({
   refreshToken: requiredString("Refresh token is required"),
 });
 
+/**
+ * A true/false field that also accepts the strings HTML forms and query
+ * strings send. Zod's coerce.boolean is JavaScript's Boolean(): every
+ * non-empty string is true, so "false" became true — an isQuoteOnly:"false"
+ * product was saved as quote-only, and buyNow:"false" kept the cart (B17).
+ * Anything that is not clearly true or false is a 400.
+ */
+const booleanish = z.preprocess((v) => {
+  if (typeof v === "string") {
+    const t = v.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(t)) return true;
+    if (["false", "0", "no", "off", ""].includes(t)) return false;
+  }
+  if (v === 1) return true;
+  if (v === 0) return false;
+  return v;
+}, z.boolean({ error: "Must be true or false" }));
+
 // Admin forms post numbers as strings, and clear optional numeric fields by
 // sending null. `coerce` handles the former, `nullish` the latter.
 const optionalNumber = z.coerce.number().nullish();
@@ -81,7 +99,7 @@ export const createProductSchema = z.object({
   discountPercentage: optionalPercent,
   stock: z.coerce.number().int("Stock must be a whole number").min(0, "Stock cannot be negative").nullish(),
   carate: optionalNumber,
-  isQuoteOnly: z.coerce.boolean().nullish(),
+  isQuoteOnly: booleanish.nullish(),
 }).passthrough();
 
 // PATCH may touch any subset of fields, so nothing is required — but whatever
@@ -113,7 +131,7 @@ export const quoteRequestSchema = z.object({
   productImage: z.string().optional(),
   customerName: requiredString("Customer name is required"),
   customerMobile: z.string({ error: "Valid mobile number is required" }).min(10, "Valid mobile number is required"),
-  isQuoteOnly: z.coerce.boolean().nullish(),
+  isQuoteOnly: booleanish.nullish(),
 });
 
 export const quoteStatusSchema = z.object({
@@ -159,7 +177,7 @@ const checkoutFields = {
   items: checkoutLines,
   shippingAddress: z.object({}).passthrough().nullish(),
   name: z.string().optional(),
-  buyNow: z.coerce.boolean().optional(),
+  buyNow: booleanish.optional(),
 };
 
 export const createOrderSchema = z.object({

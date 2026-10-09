@@ -729,14 +729,14 @@ describe("B16 · duplicate keys surfaced as 500 (fixed)", () => {
 
 // ─── B17 ─────────────────────────────────────────────────────────────────────
 
-describe("B17 · z.coerce.boolean() reads the string 'false' as true", () => {
-  bug("B17a: isQuoteOnly:'false' creates a priced product", async () => {
+describe("B17 · z.coerce.boolean() read the string 'false' as true (fixed)", () => {
+  it("B17a: isQuoteOnly:'false' creates a priced product", async () => {
     const { token } = await makeAdmin();
     const res = await ctx.api(token).post("/api/products").send({ name: "n", category: "Gold", isQuoteOnly: "false" });
     expect(res.body.data.isQuoteOnly).toBe(false);
   });
 
-  bug("B17b: buyNow:'false' still clears the cart", async () => {
+  it("B17b: buyNow:'false' still clears the cart", async () => {
     await seedCatalog();
     const c = await makeCustomer();
     await ctx.api(c.token).post("/api/cart").send({ productId: "silver-anklet", name: "A" });
