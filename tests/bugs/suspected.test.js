@@ -679,8 +679,8 @@ describe("S8 · malformed ObjectIds (fixed)", () => {
 
 // ─── S9 ──────────────────────────────────────────────────────────────────────
 
-describe("S9 · fields the React pages send that the schemas drop or mangle", () => {
-  bug("S9a: AdminAddProduct's details.description / details.advantages are persisted", async () => {
+describe("S9 · fields the React pages send that the schemas dropped or mangled (fixed)", () => {
+  it("S9a: AdminAddProduct's details.description / details.advantages are persisted", async () => {
     const { token } = await makeAdmin();
     // Exact shape AdminAddProduct.jsx onSubmit builds.
     const res = await ctx.api(token).post("/api/products").send({
@@ -696,22 +696,47 @@ describe("S9 · fields the React pages send that the schemas drop or mangle", ()
     expect(description).toBe("Hand-finished temple work");
   });
 
-  bug("S9b: badge:false (AdminAddProduct when 'HOT' is not ticked) is not stored as the string 'false'", async () => {
+  it("S9b: badge:false (AdminAddProduct when 'HOT' is not ticked) is not stored as the string 'false'", async () => {
     const { token } = await makeAdmin();
     const res = await ctx.api(token).post("/api/products").send({ name: "n", category: "Gold", badge: false });
     expect(res.body.data.badge).not.toBe("false");
   });
 
-  bug("S9c: POST /api/cart without a name is a 400, not a 500 (schema says optional, model says required)", async () => {
+  it("S9c: POST /api/cart without a name is not a 500 — the line takes the product's name", async () => {
+    await seedCatalog();
     const c = await makeCustomer();
     const res = await ctx.api(c.token).post("/api/cart").send({ productId: "gold-ring" });
-    expect(res.status).toBeLessThan(500);
+    expect(res.status).toBe(200);
+    expect((await Cart.findOne({}).lean()).name).toBe("Gold Ring");
   });
 
-  bug("S9d: POST /api/wishlist without a name is a 400, not a 500", async () => {
+  it("S9d: POST /api/wishlist without a name is not a 500 — the line takes the product's name", async () => {
+    await seedCatalog();
     const c = await makeCustomer();
     const res = await ctx.api(c.token).post("/api/wishlist").send({ productId: "gold-ring" });
-    expect(res.status).toBeLessThan(500);
+    expect(res.status).toBe(200);
+    expect((await ctx.api(c.token).get("/api/wishlist")).body[0].name).toBe("Gold Ring");
+  });
+
+  it("S9a: advantages are kept, the top-level description mirrors details, and an edit updates both", async () => {
+    const { token } = await makeAdmin();
+    const created = await ctx.api(token).post("/api/products").send({
+      name: "Temple Necklace", category: "Gold", weight: 12, details: { description: "First", advantages: ["BIS hallmarked", "22K"] },
+    });
+    const id = created.body.data._id;
+    let p = await Product.findById(id).lean();
+    expect(p.details).toEqual({ description: "First", advantages: ["BIS hallmarked", "22K"] });
+    expect(p.description).toBe("First");
+    await ctx.api(token).patch(`/api/products/${id}`).send({ details: { description: "Second", advantages: [] } });
+    p = await Product.findById(id).lean();
+    expect(p.details.description).toBe("Second");
+    expect(p.description).toBe("Second");
+  });
+
+  it("S9b: a real badge ('HOT') is still stored", async () => {
+    const { token } = await makeAdmin();
+    const res = await ctx.api(token).post("/api/products").send({ name: "n", category: "Gold", badge: "HOT" });
+    expect(res.body.data.badge).toBe("HOT");
   });
 
   it("S9 (ok): contact phone/subject, product size/carate and order shippingAddress all persist", async () => {

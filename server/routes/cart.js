@@ -120,11 +120,23 @@ router.post("/", verifyJWT, validate(addToCartSchema), async (req, res) => {
       cartItem.quantity += quantity;
       await cartItem.save();
     } else {
+      // The line needs a name (the model requires it). Clients that omit it
+      // used to get a 500 (S9c/d); take the product's own name instead.
+      const lineName =
+        name ||
+        (
+          await Product.findOne({
+            $or: [{ _id: /^[0-9a-fA-F]{24}$/.test(String(productId)) ? productId : null }, { productId }],
+          })
+            .select("name")
+            .lean()
+        )?.name ||
+        String(productId);
       cartItem = new Cart({
         productId,
         userId: req.user.userId,
         email: req.user.email,
-        name,
+        name: lineName,
         img: img || image || "/logo.png",
         image: img || image || "/logo.png",
         category: category || "Jewellery",

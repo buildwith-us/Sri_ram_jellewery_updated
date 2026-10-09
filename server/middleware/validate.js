@@ -84,6 +84,16 @@ const optionalPercent = z.coerce
 
 export const createProductSchema = z.object({
   name: requiredString("Product name is required"),
+  // S9a: the admin form's Description + Advantages.
+  details: z
+    .object({
+      description: z.string().max(5000, "Description must be under 5,000 characters").optional(),
+      advantages: z.array(z.string().max(200)).max(30).optional(),
+    })
+    .nullish(),
+  // S9b: the form sends `false` when "HOT" is not ticked; store no badge, not
+  // the string "false".
+  badge: z.preprocess((v) => (v === false || v === "" ? null : v), z.string().max(30).nullish()),
   category: requiredString("Category is required"),
   metalType: z.enum(["gold", "silver"]).nullish(),
   // Never negative: a negative weight priced the piece below zero. 0 is valid
@@ -220,6 +230,7 @@ export const trackViewSchema = z.object({
 // live metal rate server-side, so a tampered value here cannot affect billing.
 const cartItemBase = {
   productId: requiredString("Product ID is required"),
+  // Optional: the route fills it from the product when omitted (S9c/d).
   name: z.string().optional(),
   img: z.string().optional(),
   image: z.string().optional(),

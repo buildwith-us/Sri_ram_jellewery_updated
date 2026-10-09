@@ -777,9 +777,8 @@ const runAdminFlows = async (browser, viewport, shared) => {
       }
       expectTrue(created, "product was not created");
       expectTrue(created.price === previewPrice, `API price ${created.price} ≠ preview ${previewPrice}`);
-      if (!created.description && !created.details) {
-        finding(viewport, "Admin", "S9a", `Description typed in Add Product was not saved (product ${created.productId} has no description/details)`);
-      }
+      // S9a fixed: the description typed in Add Product is saved.
+      expectTrue(created.details?.description === "E2E description text" && created.description === "E2E description text", `description not saved: ${JSON.stringify({ description: created.description, details: created.details })}`);
       return `API ${rupees(created.price)} = preview`;
     }],
     ["Approve the customer's order", async () => {

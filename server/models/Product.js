@@ -11,6 +11,14 @@ const ProductSchema = new mongoose.Schema({
   image: { type: String },
   images: [{ type: String }],
   description: { type: String },
+  // What the admin form's Description and Advantages fields write. The
+  // Description tab reads details; `description` is kept equal to
+  // details.description (products route) for the places that read that.
+  // Before this was declared, strict mode silently dropped both (S9a).
+  details: {
+    description: { type: String },
+    advantages: { type: [String], default: undefined },
+  },
   rating: { type: Number, default: 0 },
   isFlashSale: { type: Boolean, default: false },
   flashSale: { type: Boolean, default: false },

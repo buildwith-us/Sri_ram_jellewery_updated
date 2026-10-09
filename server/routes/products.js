@@ -238,12 +238,20 @@ router.post("/:id/view", optionalJWT, validate(trackViewSchema), async (req, res
 
 // ─── Admin CRUD ──────────────────────────────────────────────────────────────
 
+/**
+ * The admin form writes the description under details.description. Keep the
+ * top-level `description` (read by the product page's Details section) the
+ * same text, so the two places can never show different descriptions.
+ */
+const withDescriptionMirrored = (body) =>
+  body?.details?.description !== undefined ? { ...body, description: body.details.description } : body;
+
 // POST /api/products — create product (admin)
 router.post("/", verifyJWT, requireAdmin, validate(createProductSchema), async (req, res) => {
   try {
     const productData = {
       productId: req.body.productId || `p-${Date.now()}`,
-      ...req.body,
+      ...withDescriptionMirrored(req.body),
     };
     const product = await Product.create(productData);
     res.status(201).json({ success: true, data: product });
@@ -267,7 +275,7 @@ router.patch("/:id", verifyJWT, requireAdmin, validate(updateProductSchema), asy
           { productId: req.params.id }
         ].filter(Boolean)
       },
-      req.body,
+      withDescriptionMirrored(req.body),
       { new: true }
     );
 
