@@ -48,8 +48,8 @@ afterEach(() => {
 
 // ─── S1 ──────────────────────────────────────────────────────────────────────
 
-describe("S1 · PATCH /api/users/:id passes req.body straight to findByIdAndUpdate", () => {
-  bug("S1a: an admin request cannot write passwordHash / otpHash / unnormalised phone", async () => {
+describe("S1 · PATCH /api/users/:id passed req.body straight to findByIdAndUpdate (S1a/S1e fixed)", () => {
+  it("S1a: an admin request cannot write passwordHash / otpHash / unnormalised phone", async () => {
     const admin = await makeAdmin();
     const c = await makeCustomer();
     const knownHash = await bcrypt.hash("attacker-chosen", 4);
@@ -66,16 +66,58 @@ describe("S1 · PATCH /api/users/:id passes req.body straight to findByIdAndUpda
     expect(after.phone).toBe(c.user.phone);
   });
 
-  it("S1a (impact): after that write, the customer's account signs in with a password the admin chose", async () => {
+  it("S1a: such a request is refused outright (400), so no password the admin chose ever logs in", async () => {
     const admin = await makeAdmin();
     const c = await makeCustomer();
-    await ctx.api(admin.token).patch(`/api/users/${c.user._id}`).send({
+    const res = await ctx.api(admin.token).patch(`/api/users/${c.user._id}`).send({
       email: "victim@shop.test",
       passwordHash: await bcrypt.hash("attacker-chosen", 4),
     });
+    expect(res.status).toBe(400);
     const login = await ctx.api().post("/api/auth/login").send({ email: "victim@shop.test", password: "attacker-chosen" });
-    // Documents current behaviour: 200 (an OTP-only customer now has a password login).
-    expect(login.status).toBe(200);
+    expect(login.status).toBe(401);
+  });
+
+  it.each([["emailKey", "x@y.co"], ["phone", "9876543210"], ["contactEmail", "x@y.co"], ["otpExpiresAt", "2030-01-01"], ["photoURL", "x"]])(
+    "S1a: %s is not on the whitelist → 400, nothing written",
+    async (field, value) => {
+      const admin = await makeAdmin();
+      const c = await makeCustomer();
+      const res = await ctx.api(admin.token).patch(`/api/users/${c.user._id}`).send({ [field]: value });
+      expect(res.status).toBe(400);
+      expect((await User.findById(c.user._id).lean())[field]).toEqual(c.user[field]);
+    }
+  );
+
+  it("S1a: name is still editable", async () => {
+    const admin = await makeAdmin();
+    const c = await makeCustomer();
+    const res = await ctx.api(admin.token).patch(`/api/users/${c.user._id}`).send({ name: "  Corrected Name " });
+    expect(res.status).toBe(200);
+    expect(res.body.data.name).toBe("Corrected Name");
+  });
+
+  it("S1: a customer (email-code account, no password) cannot be promoted to ADMIN", async () => {
+    const admin = await makeAdmin();
+    const c = await makeCustomer();
+    const res = await ctx.api(admin.token).patch(`/api/users/${c.user._id}`).send({ role: "ADMIN" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/password/);
+    expect((await User.findById(c.user._id).lean()).role).toBe("USER");
+  });
+
+  it("S1: an account that signs in with a password (and has no emailKey) can be promoted", async () => {
+    const admin = await makeAdmin();
+    const staff = await User.create({ email: "staff@shop.in", passwordHash: await bcrypt.hash("pw-staff-123", 4), role: "USER" });
+    const res = await ctx.api(admin.token).patch(`/api/users/${staff._id}`).send({ role: "ADMIN" });
+    expect(res.status).toBe(200);
+    expect(res.body.data.role).toBe("ADMIN");
+  });
+
+  it("S1: a password account that also has an emailKey cannot be promoted (emailKey never on an admin)", async () => {
+    const admin = await makeAdmin();
+    const odd = await User.create({ email: "odd@shop.in", emailKey: "odd@shop.in", passwordHash: "x", role: "USER" });
+    expect((await ctx.api(admin.token).patch(`/api/users/${odd._id}`).send({ role: "ADMIN" })).status).toBe(400);
   });
 
   bug("S1b: the response never includes otpHash", async () => {
@@ -99,7 +141,7 @@ describe("S1 · PATCH /api/users/:id passes req.body straight to findByIdAndUpda
     expect(await User.countDocuments({ role: "ADMIN" })).toBe(1);
   });
 
-  bug("S1e: an invalid role is refused (update validators do not run, so the enum is not enforced)", async () => {
+  it("S1e: an invalid role is refused", async () => {
     const admin = await makeAdmin();
     const c = await makeCustomer();
     const res = await ctx.api(admin.token).patch(`/api/users/${c.user._id}`).send({ role: "SUPERUSER" });

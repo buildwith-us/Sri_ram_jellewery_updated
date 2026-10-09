@@ -275,11 +275,12 @@ describe("users — admin management", () => {
     for (const u of res.body) expect(u.passwordHash).toBeUndefined();
   });
 
-  it("promote a customer to ADMIN (the Make Admin button)", async () => {
+  it("Make Admin: refused for a customer account (no password) — see S1", async () => {
     const admin = await makeAdmin();
     const c = await makeCustomer();
     const res = await ctx.api(admin.token).patch(`/api/users/${c.user._id}`).send({ role: "ADMIN" });
-    expect(res.body.data.role).toBe("ADMIN");
+    expect(res.status).toBe(400);
+    expect((await User.findById(c.user._id).lean()).role).toBe("USER");
   });
 
   it("delete a user; unknown → 404", async () => {

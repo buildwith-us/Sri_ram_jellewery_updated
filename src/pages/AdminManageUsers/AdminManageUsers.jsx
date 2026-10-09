@@ -46,7 +46,9 @@ const AdminManageUsers = () => {
           refetch();
         }
       })
-      .catch((e) => console.error(e));
+      // The server refuses to promote customer accounts (they sign in with an
+      // emailed code, never a password). Say why instead of failing silently.
+      .catch((e) => toast.error(e.response?.data?.error || "Could not change this user's role"));
   };
 
   // Handle delete user

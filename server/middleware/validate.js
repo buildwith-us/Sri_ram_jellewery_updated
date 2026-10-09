@@ -285,6 +285,16 @@ export const updateProfileSchema = z.object({
     .optional(),
 });
 
+// Admin edits to another user (PATCH /api/users/:id). A whitelist, and strict:
+// any other key is a 400, not a silent write. The route used to pass the body
+// straight to findByIdAndUpdate, so an admin request could set passwordHash
+// (handing a customer account a password the admin chose), otpHash, emailKey,
+// an unnormalised phone, or a role outside the enum (bug S1).
+export const adminUpdateUserSchema = z.strictObject({
+  name: z.string().trim().min(1, "Name is required").max(100, "Name must be under 100 characters").optional(),
+  role: z.enum(["ADMIN", "USER"], { error: "Role must be ADMIN or USER" }).optional(),
+});
+
 export const changePasswordSchema = z.object({
   currentPassword: requiredString("Current password is required"),
   newPassword: z.string({ error: "New password is required" }).min(6, "New password must be at least 6 characters"),

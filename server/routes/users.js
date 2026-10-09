@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import { User } from "../models/User.js";
 import { verifyJWT, requireAdmin } from "../middleware/auth.js";
 import mongoose from "mongoose";
-import { validate, updateProfileSchema, changePasswordSchema, shippingAddressSchema } from "../middleware/validate.js";
+import { validate, updateProfileSchema, changePasswordSchema, shippingAddressSchema, adminUpdateUserSchema } from "../middleware/validate.js";
 import { normalizeIndianPhone } from "../utils/phone.js";
 import { profileStatus } from "../utils/profile.js";
 
@@ -267,18 +267,28 @@ router.get("/", verifyJWT, requireAdmin, async (req, res) => {
 });
 
 // PATCH /api/users/:id — admin update user
-router.patch("/:id", verifyJWT, requireAdmin, async (req, res) => {
+router.patch("/:id", verifyJWT, requireAdmin, validate(adminUpdateUserSchema), async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true }
-    ).select("-passwordHash");
-
-    if (!user) {
+    const target = await User.findById(req.params.id);
+    if (!target) {
       return res.status(404).json({ error: "User not found" });
     }
 
+    // Only an account that signs in with a password can be an administrator.
+    // A customer signs in with an emailed code, and that path must never
+    // produce an admin session — so customers cannot be promoted. To make a
+    // customer an administrator, create an admin account for them instead.
+    if (req.body.role === "ADMIN" && target.role !== "ADMIN" && (!target.passwordHash || target.emailKey)) {
+      return res.status(400).json({
+        error: "Only accounts that sign in with a password can be administrators. Customer accounts can't be promoted.",
+      });
+    }
+
+    const updates = {};
+    if (req.body.name !== undefined) updates.name = req.body.name;
+    if (req.body.role !== undefined) updates.role = req.body.role;
+
+    const user = await User.findByIdAndUpdate(target._id, { $set: updates }, { new: true }).select("-passwordHash");
     res.json({ success: true, data: user });
   } catch (error) {
     res.status(500).json({ error: "Failed to update user" });
