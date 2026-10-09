@@ -174,9 +174,10 @@ describe("newsletter", () => {
 describe("admin routes", () => {
   it("total-spent groups by userId (OTP customers have no email)", async () => {
     const admin = await makeAdmin();
-    await insertOrder({ userId: "u1", totalAmount: 100 });
-    await insertOrder({ userId: "u1", totalAmount: 50 });
-    await insertOrder({ userId: "u2", totalAmount: 70 });
+    // Delivered COD orders count as revenue (utils/revenue.js, B6).
+    await insertOrder({ userId: "u1", totalAmount: 100, orderStatus: "delivered" });
+    await insertOrder({ userId: "u1", totalAmount: 50, orderStatus: "delivered" });
+    await insertOrder({ userId: "u2", totalAmount: 70, orderStatus: "delivered" });
     const res = await ctx.api(admin.token).get("/api/admin/total-spent");
     expect(res.body).toEqual([
       { userId: "u1", totalSpent: 150, orderCount: 2, email: null },

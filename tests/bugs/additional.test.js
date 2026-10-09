@@ -414,15 +414,15 @@ describe("B5 · inactive products were still listed and orderable (fixed)", () =
 
 // ─── B6 ──────────────────────────────────────────────────────────────────────
 
-describe("B6 · dashboard revenue figures disagree with each other", () => {
-  bug("B6a: /revenue counts delivered COD orders", async () => {
+describe("B6 · dashboard revenue figures disagreed with each other (fixed — utils/revenue.js)", () => {
+  it("B6a: /revenue counts delivered COD orders", async () => {
     const admin = await makeAdmin();
     await insertOrder({ paymentMethod: "cod", paymentStatus: "unpaid", orderStatus: "delivered", totalAmount: 50000 });
     const rev = (await ctx.api(admin.token).get("/api/admin-dashboard/revenue")).body.data;
     expect(rev.reduce((s, r) => s + r.totalRevenue, 0)).toBe(50000);
   });
 
-  bug("B6b: /stats totalRevenue excludes expired, rejected and never-paid online orders", async () => {
+  it("B6b: /stats totalRevenue excludes expired, rejected and never-paid online orders", async () => {
     const admin = await makeAdmin();
     await insertOrder({ totalAmount: 1000, orderStatus: "delivered" });
     await insertOrder({ totalAmount: 7777, orderStatus: "expired", paymentMethod: "razorpay", paymentStatus: "expired" });
@@ -431,13 +431,36 @@ describe("B6 · dashboard revenue figures disagree with each other", () => {
     expect(stats.totalRevenue).toBe(1000);
   });
 
-  bug("B6c: /admin/total-spent excludes cancelled and expired orders", async () => {
+  it("B6c: /admin/total-spent excludes cancelled and expired orders", async () => {
     const admin = await makeAdmin();
-    await insertOrder({ userId: "u1", totalAmount: 1000 });
+    await insertOrder({ userId: "u1", totalAmount: 1000, orderStatus: "delivered" });
     await insertOrder({ userId: "u1", totalAmount: 5000, orderStatus: "cancelled" });
     await insertOrder({ userId: "u1", totalAmount: 5000, orderStatus: "expired" });
     const rows = (await ctx.api(admin.token).get("/api/admin/total-spent")).body;
     expect(rows[0].totalSpent).toBe(1000);
+  });
+
+  it("B6: all four revenue figures agree on one mixed set of orders", async () => {
+    const admin = await makeAdmin();
+    const counted = [
+      { userId: "u1", paymentMethod: "razorpay", paidAt: new Date(), paymentStatus: "paid", totalAmount: 30000 }, // paid online
+      { userId: "u2", paymentMethod: "cod", orderStatus: "delivered", totalAmount: 20000 }, // delivered COD
+      { userId: "u2", paymentMethod: "COD", orderStatus: "delivered", totalAmount: 5000 }, // legacy casing
+    ];
+    const notCounted = [
+      { userId: "u3", paymentMethod: "cod", orderStatus: "processing", totalAmount: 111 }, // COD not delivered
+      { userId: "u3", paymentMethod: "razorpay", paymentStatus: "pending", orderStatus: "pending", totalAmount: 222 }, // unpaid online
+      { userId: "u3", paymentMethod: "razorpay", paidAt: new Date(), orderStatus: "cancelled", refundRequired: true, totalAmount: 333 },
+      { userId: "u3", paymentMethod: "razorpay", paidAt: new Date(), orderStatus: "expired", totalAmount: 444 },
+      { userId: "u3", paymentMethod: "razorpay", paidAt: new Date(), approvalStatus: "REJECTED", totalAmount: 555 },
+    ];
+    for (const o of [...counted, ...notCounted]) await insertOrder(o);
+    const get = async (url) => (await ctx.api(admin.token).get(url)).body;
+    const chart = (await get("/api/admin-dashboard/revenue")).data.reduce((s, r) => s + r.totalRevenue, 0);
+    const stats = (await get("/api/admin-dashboard/stats")).totalRevenue;
+    const trend = (await get("/api/admin-dashboard/income-stats")).reduce((s, r) => s + r.income, 0);
+    const perCustomer = (await get("/api/admin/total-spent")).reduce((s, r) => s + r.totalSpent, 0);
+    expect({ chart, stats, trend, perCustomer }).toEqual({ chart: 55000, stats: 55000, trend: 55000, perCustomer: 55000 });
   });
 });
 

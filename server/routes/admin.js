@@ -1,4 +1,5 @@
 import express from "express";
+import { REVENUE_MATCH } from "../utils/revenue.js";
 import { v2 as cloudinary } from "cloudinary";
 import { User } from "../models/User.js";
 import { Order } from "../models/Order.js";
@@ -24,6 +25,9 @@ router.get("/total-spent", verifyJWT, requireAdmin, async (req, res) => {
     // `email` is still projected for display and for reconciling old records,
     // but it is no longer what the rows are keyed on.
     const result = await Order.aggregate([
+      // Only what counts as revenue (utils/revenue.js) — not cancelled,
+      // expired or rejected orders, nor unpaid ones.
+      { $match: REVENUE_MATCH },
       {
         $group: {
           _id: "$userId",

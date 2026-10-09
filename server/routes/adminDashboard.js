@@ -1,4 +1,5 @@
 import express from "express";
+import { REVENUE_MATCH } from "../utils/revenue.js";
 import { Order } from "../models/Order.js";
 import { Wishlist } from "../models/Wishlist.js";
 import { Product } from "../models/Product.js";
@@ -28,7 +29,7 @@ router.get("/revenue", verifyJWT, requireAdmin, async (req, res) => {
     }
 
     const revenue = await Order.aggregate([
-      { $match: { paymentStatus: { $in: ["paid", null] }, orderStatus: { $ne: "cancelled" } } },
+      { $match: REVENUE_MATCH }, // see utils/revenue.js
       {
         $group: {
           _id: dateFormat,
@@ -158,7 +159,7 @@ router.get("/stats", verifyJWT, requireAdmin, async (req, res) => {
   try {
     const totalOrders = await Order.countDocuments();
     const totalRevenue = await Order.aggregate([
-      { $match: { orderStatus: { $ne: "cancelled" } } },
+      { $match: REVENUE_MATCH }, // see utils/revenue.js
       { $group: { _id: null, total: { $sum: "$totalAmount" } } },
     ]);
     const totalProducts = await Product.countDocuments();
@@ -208,7 +209,7 @@ router.get("/income-stats", verifyJWT, requireAdmin, async (req, res) => {
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
     const incomeStats = await Order.aggregate([
-      { $match: { createdAt: { $gte: sixMonthsAgo }, orderStatus: { $ne: "cancelled" } } },
+      { $match: { createdAt: { $gte: sixMonthsAgo }, ...REVENUE_MATCH } }, // see utils/revenue.js
       {
         $group: {
           _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
