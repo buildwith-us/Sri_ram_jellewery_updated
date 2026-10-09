@@ -1,6 +1,4 @@
 import React from "react";
-import { LoginGateProvider } from "../context/LoginGateContext";
-import useResumePendingAction from "../hooks/useResumePendingAction";
 import DashboardNav from "../pages/Dashboard/DashboardNav/DashboardNav";
 import { Outlet } from "react-router-dom";
 import CustomHelmet from "../components/CustomHelmet/CustomHelmet";
@@ -12,7 +10,6 @@ import Footer from "../pages/Footer/Footer";
 import { Toaster } from "react-hot-toast";
 
 const DashboardLayoutInner = () => {
-  useResumePendingAction();
 
   const [userFromDB, isUserLoading] = useUserInfo();
   const { user, isAuthLoading } = useAuthContext();
@@ -62,10 +59,7 @@ const DashboardLayoutInner = () => {
   );
 };
 
-const DashboardLayout = () => (
-  <LoginGateProvider>
-    <DashboardLayoutInner />
-  </LoginGateProvider>
-);
+// The sign-in gate and pending-action resume are mounted once in AppShell.
+const DashboardLayout = () => <DashboardLayoutInner />;
 
 export default DashboardLayout;

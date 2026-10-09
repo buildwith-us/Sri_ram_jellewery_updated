@@ -42,6 +42,20 @@ fs.mkdirSync(OUT, { recursive: true });
 // ─── Process management ──────────────────────────────────────────────────────
 
 const children = [];
+// Never leave the API or Vite running behind us, however this process ends.
+const killChildren = () => {
+  for (const c of children) {
+    try {
+      c.kill("SIGTERM");
+    } catch {}
+  }
+};
+process.on("exit", killChildren);
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(130));
+process.on("uncaughtException", (err) => {
+  console.error(err);
+  process.exit(1);
+});
 const start = (name, cmd, args, opts) => {
   const child = spawn(cmd, args, { ...opts, stdio: ["ignore", "pipe", "pipe"] });
   const log = fs.createWriteStream(path.join(OUT, `${name}.log`));
@@ -140,6 +154,8 @@ let phoneSeq = 0;
 const freshPhone = () => `9${String(Date.now() % 1e8).padStart(8, "0")}${++phoneSeq % 10}`;
 
 const rupees = (n) => `₹${Math.round(n).toLocaleString("en-IN")}`;
+/** Matches a price however the page spaces it ("₹1,04,545" or "₹ 1,04,545"). */
+const priceText = (n) => new RegExp(`₹\\s?${Math.round(n).toLocaleString("en-IN")}`);
 const parseRupees = (s) => Number(String(s).replace(/[^\d.]/g, ""));
 
 // ─── Browser setup ───────────────────────────────────────────────────────────
@@ -149,7 +165,14 @@ const PNG_1PX = Buffer.from(
   "base64"
 );
 
-const newContext = async (browser, viewport) => {
+const DISMISSED_UNTIL_KEY = "sri-ram-auth-prompt-dismissed-until";
+
+/**
+ * `timer: false` (the default) pre-dismisses the timed sign-in prompt so it
+ * cannot pop up in the middle of flows that are testing something else. The
+ * flow that tests the prompt itself opens its context with `timer: true`.
+ */
+const newContext = async (browser, viewport, { timer = false } = {}) => {
   const size = viewport === "mobile" ? { width: 390, height: 844 } : { width: 1280, height: 800 };
   const context = await browser.newContext({
     viewport: size,
@@ -157,6 +180,13 @@ const newContext = async (browser, viewport) => {
     hasTouch: viewport === "mobile",
     deviceScaleFactor: 1,
   });
+  if (!timer) {
+    await context.addInitScript((key) => {
+      try {
+        localStorage.setItem(key, String(Date.now() + 365 * 24 * 3600 * 1000));
+      } catch {}
+    }, DISMISSED_UNTIL_KEY);
+  }
 
   await context.route("**/*", async (route) => {
     const url = new URL(route.request().url());
@@ -177,17 +207,7 @@ const newContext = async (browser, viewport) => {
   return context;
 };
 
-const NUDGE_TEXT = "Sign in to save your favourites, track your orders, and check out faster.";
-
 const attachConsole = (page, viewport) => {
-  // The guest "please sign in" nudge reappears every 30 s and would block any
-  // click behind it. Dismiss only that one; the purchase gate (a different
-  // message) is something the flows interact with on purpose.
-  page
-    .addLocatorHandler(page.getByText(NUDGE_TEXT), async () => {
-      await page.getByRole("button", { name: /continue browsing/i }).click();
-    })
-    .catch(() => {});
   page.on("console", (msg) => {
     if (msg.type() !== "error") return;
     const text = msg.text();
@@ -200,10 +220,10 @@ const attachConsole = (page, viewport) => {
   });
 };
 
-/** Close the periodic "please sign in" nudge if it is in the way. */
+/** Safety net: close a sign-in dialog that is open but not part of the step. */
 const dismissNudge = async (page) => {
-  const btn = page.getByRole("button", { name: /continue browsing/i });
-  if (await btn.isVisible().catch(() => false)) await btn.click();
+  const dialog = page.getByRole("dialog");
+  if (await dialog.isVisible().catch(() => false)) await page.keyboard.press("Escape");
 };
 
 const overflow = new Map(); // "viewport path" → description of what sticks out
@@ -244,26 +264,48 @@ const goto = async (page, p) => {
 
 // ─── Flows ───────────────────────────────────────────────────────────────────
 
-const signInWithOtp = async (page, phone) => {
-  await page.locator('input[type="tel"]').fill(phone);
-  await page.getByRole("button", { name: /send otp/i }).click();
-  await page.locator('input[placeholder="------"]').fill("123456");
+let emailSeq = 0;
+const freshEmail = (tag) => `e2e.${tag}.${Date.now()}.${++emailSeq}@example.com`;
+
+/**
+ * The code the API "sent" to `email`. The E2E API runs in development with no
+ * email provider, i.e. the console mode: each message is printed to its log.
+ */
+const codeFor = async (email) => {
+  const esc = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`To:\\s+${esc}\\nSubject:[^\\n]*\\n\\n[^\\n]*sign-in code is (\\d{6})`, "g");
+  for (let i = 0; i < 40; i++) {
+    const log = fs.readFileSync(path.join(OUT, "api.log"), "utf8");
+    const matches = [...log.matchAll(re)];
+    if (matches.length) return matches.at(-1)[1];
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error(`no sign-in code for ${email} in api.log`);
+};
+
+/**
+ * Sign in with the email flow, in the modal (prefix "auth-modal") or on the
+ * /login page (prefix "auth-page"). A new account also gets name + phone.
+ * Returns whether the details step was shown.
+ */
+const signInWithEmail = async (page, email, { prefix = "auth-modal", name = "E2E Customer", phone = freshPhone() } = {}) => {
+  await page.locator(`#${prefix}-email`).fill(email);
+  await page.getByRole("button", { name: /^send code$/i }).click();
+  await page.locator(`#${prefix}-code`).waitFor({ timeout: 10_000 });
+  await page.locator(`#${prefix}-code`).fill(await codeFor(email));
   await page.getByRole("button", { name: /verify & continue/i }).click();
-  // First sign-in: name/email step, then the onboarding screen.
-  const nameInput = page.locator('input[placeholder="Enter your full name"]');
-  await Promise.race([
-    nameInput.waitFor({ timeout: 10_000 }),
-    page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 10_000 }),
-  ]).catch(() => {});
-  if (await nameInput.isVisible().catch(() => false)) {
-    await nameInput.fill("E2E Customer");
+  const nameInput = page.locator(`#${prefix}-name`);
+  const details = await nameInput.waitFor({ timeout: 6_000 }).then(() => true, () => false);
+  if (details) {
+    await nameInput.fill(name);
+    await page.locator(`#${prefix}-phone`).fill(phone);
     await page.getByRole("button", { name: /^continue$/i }).click();
   }
-  await page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 10_000 });
-  if (new URL(page.url()).pathname === "/welcome") {
-    await page.getByRole("button", { name: /start browsing/i }).click();
-  }
+  return details;
 };
+
+const focusIsInsideDialog = (page) =>
+  page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"]')));
 
 const addAddressViaUi = async (page) => {
   await goto(page, "/dashboard/myAddress");
@@ -323,7 +365,16 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
       await goto(page, "/shop");
       await dismissNudge(page);
       await page.getByRole("button", { name: /^price/i }).click();
-      await page.getByRole("button", { name: /over ₹1l/i }).click();
+      const option = page.getByRole("button", { name: /over ₹1l/i });
+      const box = await option.boundingBox();
+      const width = page.viewportSize().width;
+      if (box && box.x + box.width > width) {
+        finding(viewport, "Guest browsing", "M1", `Shop "Price" dropdown opens off-screen at ${width}px (option right edge at ${Math.round(box.x + box.width)}px), so it cannot be tapped. Continuing via ?price=over1l.`);
+        await page.screenshot({ path: path.join(OUT, `${viewport}-evidence-price-dropdown-offscreen.png`) });
+        await goto(page, "/shop?price=over1l");
+      } else {
+        await option.click();
+      }
       await page.waitForURL(/price=over1l/);
       let names = [];
       for (let i = 0; i < 20; i++) {
@@ -339,7 +390,7 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
       await dismissNudge(page);
       await page.locator("article", { hasText: p1.name }).first().click();
       await page.waitForURL(new RegExp(`/products/${p1._id}/description`));
-      await page.getByText(rupees(p1.price)).first().waitFor({ timeout: 10_000 });
+      await page.getByText(priceText(p1.price)).first().waitFor({ timeout: 10_000 });
       return `${p1.name} shows ${rupees(p1.price)}`;
     }],
     ["Description and Client Reviews tabs", async () => {
@@ -362,21 +413,30 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
     }],
   ]);
 
-  await flow(viewport, "Add to bag → login → resume", page, [
-    ["Guest ADD TO BAG opens the login prompt", async () => {
+  await flow(viewport, "Add to bag → sign-in modal → resume", page, [
+    ["Guest ADD TO BAG opens the sign-in modal, focus inside", async () => {
       await goto(page, `/products/${p1._id}/description`);
-      await dismissNudge(page);
       await page.getByRole("button", { name: /add to bag/i }).click();
-      await page.getByText(/sign in to add this piece to your bag/i).waitFor({ timeout: 5_000 });
+      const dialog = page.getByRole("dialog");
+      await dialog.waitFor({ timeout: 5_000 });
+      await dialog.getByText(/sign in to add this piece to your bag/i).waitFor();
+      expectTrue(await focusIsInsideDialog(page), "focus did not move into the dialog");
+      expectTrue(
+        (await page.evaluate(() => getComputedStyle(document.body).overflow)) === "hidden",
+        "background scroll is not locked"
+      );
     }],
-    ["Prompt → /login", async () => {
-      await page.getByRole("link", { name: /sign-in\/register/i }).click();
-      await page.waitForURL(/\/login/);
-    }],
-    ["OTP sign-in with 123456", async () => {
-      await signInWithOtp(page, phone);
+    ["New email: code, then name + phone, in the modal", async () => {
+      const shownDetails = await signInWithEmail(page, freshEmail(viewport), { phone });
+      expectTrue(shownDetails, "a new account was not asked for name and phone");
+      await page.getByRole("dialog").waitFor({ state: "detached", timeout: 10_000 });
       token = await tokenOf(page);
       expectTrue(token, "no access token in localStorage after sign-in");
+      const me = (await api("GET", "/users/me", { token })).body.data;
+      expectTrue(me.name === "E2E Customer" && me.phone === `+91${phone}`, `profile not saved: ${JSON.stringify(me)}`);
+    }],
+    ["Back on the same product page — no /welcome detour with an action pending", async () => {
+      expectTrue(new URL(page.url()).pathname === `/products/${p1._id}/description`, `ended on ${page.url()}`);
     }],
     ["Pending ADD TO BAG resumes after sign-in", async () => {
       let cart = [];
@@ -394,7 +454,7 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
     ["Checkout lists the bag with the server price", async () => {
       await goto(page, "/checkout");
       await page.getByText(p1.name).first().waitFor({ timeout: 10_000 });
-      await page.getByText(rupees(p1.price)).first().waitFor();
+      await page.getByText(priceText(p1.price)).first().waitFor();
     }],
     ["Cash on Delivery → Complete Order → /order-success", async () => {
       await page.getByText("CASH ON DELIVERY", { exact: true }).click();
@@ -485,19 +545,19 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
     }],
   ]);
 
-  await flow(viewport, "UPI / QR SCAN checkout (bug S2)", page, [
-    ["UPI 'order' completes with no payment step", async () => {
+  await flow(viewport, "UPI / QR SCAN cannot place an unpaid order (S2 fixed)", page, [
+    ["UPI tile → Complete Order is refused, nothing stored", async () => {
+      const before = (await api("GET", "/orders", { token })).body.length;
       await goto(page, `/products/${p4._id}/description`);
       await page.getByRole("button", { name: /buy now/i }).click();
       await page.waitForURL(/\/checkout/);
       await page.getByText("UPI / QR SCAN", { exact: true }).click();
       await page.getByRole("button", { name: /complete order/i }).click();
-      await page.waitForURL(/\/order-success/, { timeout: 15_000 });
+      await page.getByText(/only cash on delivery orders can be placed here/i).first().waitFor({ timeout: 10_000 });
+      expectTrue(/\/checkout/.test(page.url()), `navigated away to ${page.url()}`);
       const orders = (await api("GET", "/orders", { token })).body;
-      const upi = orders.find((o) => o.paymentMethod === "upi");
-      expectTrue(upi, "no upi order stored");
-      finding(viewport, "UPI / QR SCAN checkout (bug S2)", "S2", `"Order Confirmed" shown; order ${upi.orderId} stored with paymentMethod=upi, paymentStatus=${upi.paymentStatus}, paidAt=${upi.paidAt} — nothing was paid, and the cron will expire it in 30 min`);
-      await page.screenshot({ path: path.join(OUT, `${viewport}-evidence-upi-order-confirmed.png`), fullPage: true });
+      expectTrue(orders.length === before && !orders.some((o) => o.paymentMethod === "upi"), "an unpaid UPI order was stored");
+      finding(viewport, "UPI / QR SCAN cannot place an unpaid order (S2 fixed)", "S2-UI", "The UPI tile now shows the server's refusal; wiring it to Razorpay is your pending decision.");
     }],
   ]);
 
@@ -508,6 +568,76 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
     }],
   ]);
 
+  return context;
+};
+
+const runTimedPromptFlow = async (browser, viewport, seeded) => {
+  const context = await newContext(browser, viewport, { timer: true });
+  const page = await context.newPage();
+  const p4 = seeded.p4;
+  let t0 = 0;
+  const dialog = () => page.getByRole("dialog");
+
+  await flow(viewport, "Timed sign-in prompt", page, [
+    ["Not shown in the first 20 s", async () => {
+      t0 = Date.now();
+      await goto(page, "/");
+      await page.waitForTimeout(20_000);
+      expectTrue(!(await dialog().isVisible()), "the prompt appeared before 30 s of active time");
+    }],
+    ["Appears once 30 s of active time have passed, focus inside", async () => {
+      await dialog().waitFor({ timeout: 20_000 });
+      const waited = Date.now() - t0;
+      expectTrue(waited >= 29_000, `appeared after only ${waited} ms`);
+      expectTrue(await focusIsInsideDialog(page), "focus did not move into the dialog");
+      return `appeared after ${(waited / 1000).toFixed(1)} s`;
+    }],
+    ["Esc closes it; the dismissal is remembered for 7 days", async () => {
+      await page.keyboard.press("Escape");
+      await dialog().waitFor({ state: "detached", timeout: 5_000 });
+      const until = Number(await page.evaluate((k) => localStorage.getItem(k), DISMISSED_UNTIL_KEY));
+      const days = (until - Date.now()) / 86_400_000;
+      expectTrue(days > 6.9 && days <= 7.01, `dismissal lasts ${days.toFixed(2)} days`);
+    }],
+    ["A new tab (fresh session) does not show it again", async () => {
+      const tab = await context.newPage();
+      await goto(tab, "/");
+      await tab.waitForTimeout(35_000);
+      const shown = await tab.getByRole("dialog").isVisible();
+      await tab.close();
+      expectTrue(!shown, "the prompt reappeared within the 7-day dismissal");
+    }],
+    ["Intents still open it after dismissal; Esc returns focus to the trigger", async () => {
+      await goto(page, `/products/${p4._id}/description`);
+      await page.getByRole("button", { name: /add to bag/i }).click();
+      await dialog().waitFor({ timeout: 5_000 });
+      await page.keyboard.press("Escape");
+      await dialog().waitFor({ state: "detached", timeout: 5_000 });
+      const focused = await page.evaluate(() => document.activeElement?.textContent || "");
+      expectTrue(/add to bag/i.test(focused), `focus went to "${focused.trim().slice(0, 40)}"`);
+    }],
+    ["Tab and Shift+Tab stay inside the modal", async () => {
+      await page.getByRole("button", { name: /add to bag/i }).click();
+      await dialog().waitFor({ timeout: 5_000 });
+      for (let i = 0; i < 8; i++) {
+        await page.keyboard.press(i % 3 === 2 ? "Shift+Tab" : "Tab");
+        expectTrue(await focusIsInsideDialog(page), `focus escaped the dialog after ${i + 1} tab presses`);
+      }
+    }],
+    ["Sign in as a new email: back on the same page, bag intact", async () => {
+      const shownDetails = await signInWithEmail(page, freshEmail(`timer-${viewport}`));
+      expectTrue(shownDetails, "new account was not asked for name and phone");
+      await dialog().waitFor({ state: "detached", timeout: 10_000 });
+      expectTrue(new URL(page.url()).pathname === `/products/${p4._id}/description`, `ended on ${page.url()}`);
+      const token = await tokenOf(page);
+      let cart = [];
+      for (let i = 0; i < 20 && !cart.length; i++) {
+        cart = (await api("GET", "/cart", { token })).body;
+        if (!cart.length) await page.waitForTimeout(300);
+      }
+      expectTrue(cart.length === 1 && cart[0].productId === p4.productId, `bag after sign-in: ${JSON.stringify(cart.map((c) => c.productId))}`);
+    }],
+  ]);
   return context;
 };
 
@@ -545,7 +675,7 @@ const runAdminFlows = async (browser, viewport, shared) => {
     ["Add product: live preview price", async () => {
       await goto(page, "/dashboard/adminAddProducts");
       await page.locator('[name="name"]').fill(productName);
-      await page.locator('[name="description"]').fill("E2E description text");
+      await page.locator('textarea[name="description"]').fill("E2E description text");
       await page.locator('select[name="metalType"]').selectOption("gold");
       await page.locator('[name="weight"]').fill("5");
       await page.locator('[name="wastagePercent"]').fill("10");
@@ -554,10 +684,12 @@ const runAdminFlows = async (browser, viewport, shared) => {
       await page.locator('select[name="category"]').selectOption({ label: "Gold" });
       await page.locator('input[type="file"]').setInputFiles({ name: "e2e.png", mimeType: "image/png", buffer: PNG_1PX });
       const text = await page.getByText(/customer price/i).locator("xpath=../..").innerText();
-      const m = text.match(/₹[\d,]+/);
-      expectTrue(m, `no price in preview: ${text}`);
-      previewPrice = parseRupees(m[0]);
-      return `preview ${m[0]}`;
+      // The box also shows the rate ("gold @ ₹7,300/g") and the breakdown rows;
+      // the customer price is the largest figure in it.
+      const amounts = [...text.matchAll(/₹\s?[\d,]+/g)].map((m) => parseRupees(m[0]));
+      expectTrue(amounts.length, `no price in preview: ${text}`);
+      previewPrice = Math.max(...amounts);
+      return `preview ${rupees(previewPrice)}`;
     }],
     ["Publish; API price equals the preview", async () => {
       await page.getByRole("button", { name: /^publish$/i }).click();
@@ -665,7 +797,8 @@ const main = async () => {
       PORT: String(API_PORT),
       MONGODB_URI: `${mongod.getUri()}e2e`,
       JWT_SECRET: "e2e-jwt-secret-not-for-anything-else",
-      ALLOW_TEST_OTP: "true",
+      // No email provider: development console mode prints each sign-in code
+      // to the API log, which codeFor() reads. No test OTP.
       ADMIN_PASSWORD,
       ALLOWED_ORIGINS: WEB,
       PUBLIC_SITE_URL: WEB,
@@ -695,6 +828,7 @@ const main = async () => {
       // Rates reset to the seeded value so each viewport sees the same prices.
       const ctxs = [];
       ctxs.push(await runCustomerFlows(browser, viewport, seeded, shared));
+      ctxs.push(await runTimedPromptFlow(browser, viewport, seeded));
       ctxs.push(await runAdminFlows(browser, viewport, shared));
       ctxs.push(await runLegalPages(browser, viewport));
       for (const c of ctxs) await c.close();

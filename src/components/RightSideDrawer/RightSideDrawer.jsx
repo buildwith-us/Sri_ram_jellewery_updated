@@ -1,9 +1,29 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { TfiClose } from "react-icons/tfi";
+import useAuthContext from "../../hooks/useAuthContext";
+import { useLoginGate } from "../../context/LoginGateContext";
+import { useRegisterDialog } from "../../utils/dialogRegistry";
 
 const RightSideDrawer = ({ showRightDrawer, setShowRightDrawer, cartData, removeFromCart, cartSubtotal }) => {
+  const { user } = useAuthContext();
+  const { requireLogin } = useLoginGate();
+  // While the bag is open the timed sign-in prompt must not appear over it.
+  useRegisterDialog("cart-drawer", showRightDrawer);
+
   if (!showRightDrawer) return null;
+
+  // A guest's Checkout opens sign-in here and resumes to /checkout afterwards,
+  // rather than bouncing them to the /login page.
+  const onCheckout = (event) => {
+    setShowRightDrawer(false);
+    if (user) return;
+    event.preventDefault();
+    requireLogin({
+      message: "Sign in to check out — we'll take you straight there afterwards.",
+      intent: { type: "checkout" },
+    });
+  };
 
   return (
     <div className="fixed inset-0 z-[10000] overflow-hidden font-body-base">
@@ -76,7 +96,7 @@ const RightSideDrawer = ({ showRightDrawer, setShowRightDrawer, cartData, remove
             <div className="space-y-3">
               <Link
                 to="/checkout"
-                onClick={() => setShowRightDrawer(false)}
+                onClick={onCheckout}
                 className="block w-full bg-primary-container text-on-primary-container text-center py-4 md:py-5 font-button-text text-sm font-semibold uppercase tracking-widest hover:scale-[1.02] active:scale-95 transition-ui shadow-lg shadow-primary/10"
               >
                 Checkout

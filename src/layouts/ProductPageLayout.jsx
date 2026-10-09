@@ -5,11 +5,8 @@ import DynamicProduct from "../pages/DynamicProduct/DynamicProduct";
 import RelatedDynamicProducts from "../pages/RelatedDynamicProducts/RelatedDynamicProducts";
 import Header from "../pages/Header/Header";
 import Footer from "../pages/Footer/Footer";
-import { LoginGateProvider } from "../context/LoginGateContext";
-import useResumePendingAction from "../hooks/useResumePendingAction";
 
 const ProductPageLayoutInner = () => {
-  useResumePendingAction();
   const { id } = useParams();
 
   // Arriving here from a scrolled shop grid otherwise keeps that scroll offset,
@@ -46,10 +43,7 @@ const ProductPageLayoutInner = () => {
 // This layout is a separate root route (not nested under MainLayout), so it
 // needs its own gate provider — otherwise the purchase actions on the product
 // page fall back to a no-op and silently do nothing.
-const ProductPageLayout = () => (
-  <LoginGateProvider>
-    <ProductPageLayoutInner />
-  </LoginGateProvider>
-);
+// The sign-in gate and pending-action resume are mounted once in AppShell.
+const ProductPageLayout = () => <ProductPageLayoutInner />;
 
 export default ProductPageLayout;

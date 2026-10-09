@@ -16,6 +16,7 @@ import AdminSubscribers from "../pages/Dashboard/AdminSubscribers/AdminSubscribe
 import Wishlist from "../pages/Wishlist/Wishlist";
 import PrivateRoute from "./PrivateRoute/PrivateRoute";
 import DashboardLayout from "../layouts/DashboardLayout";
+import AppShell from "../layouts/AppShell";
 import CategoryGold from "../pages/CategoryGold/CategoryGold";
 import MyDashboard from "../pages/Dashboard/MyDashboard/MyDashboard";
 import MyOrders from "../pages/Dashboard/MyOrders/MyOrders";
@@ -47,6 +48,11 @@ import ForgotPassword from "../pages/ForgotPassword/ForgotPassword";
 import ResetPassword from "../pages/ResetPassword/ResetPassword";
 
 const router = createBrowserRouter([
+  {
+    // Pathless parent: mounts the sign-in gate once for every route below.
+    element: <AppShell />,
+    errorElement: <ErrorPage />,
+    children: [
   {
     path: "/",
     element: <MainLayout />,
@@ -311,6 +317,8 @@ const router = createBrowserRouter([
           },
         ],
       },
+    ],
+  },
 ]);
 
 export default router;

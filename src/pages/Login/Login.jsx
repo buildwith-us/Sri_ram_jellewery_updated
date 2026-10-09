@@ -1,17 +1,14 @@
 import React from "react";
-import PhoneAuthForm from "../../components/PhoneAuthForm/PhoneAuthForm";
+import AuthForm from "../../components/AuthForm/AuthForm";
 
 const Login = () => (
-  <PhoneAuthForm
+  <AuthForm
     helmetTitle="Sign In"
     heroEyebrow="Heritage Craftsmanship"
     heroHeadline="Timeless Elegance, Handcrafted for You."
-    step1Eyebrow="Welcome"
-    step1Title="Welcome Back"
-    step1Subtitle="Sign in to access your wishlist and orders"
-    bottomText="Don't have an account?"
+    bottomText="New here? The same email creates your account."
     bottomLinkTo="/register"
-    bottomLinkLabel="Sign Up"
+    bottomLinkLabel="Create an account"
   />
 );
 

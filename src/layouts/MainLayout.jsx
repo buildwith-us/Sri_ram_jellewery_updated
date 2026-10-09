@@ -3,11 +3,8 @@ import { Outlet, useLocation } from "react-router-dom";
 import Header from "../pages/Header/Header";
 import Footer from "../pages/Footer/Footer";
 import { Toaster } from "react-hot-toast";
-import { LoginGateProvider } from "../context/LoginGateContext";
-import useResumePendingAction from "../hooks/useResumePendingAction";
 
 const MainLayoutInner = () => {
-  useResumePendingAction();
   const location = useLocation();
 
   // Scroll to top on route change
@@ -26,9 +23,6 @@ const MainLayoutInner = () => {
       });
     }
   }, [location]);
-
-  // The timed login nudge lives in LoginGateProvider so it also covers the
-  // product page, which is a separate root route with its own provider.
 
   return (
     <div className="w-full">
@@ -50,10 +44,7 @@ const MainLayoutInner = () => {
   );
 };
 
-const MainLayout = () => (
-  <LoginGateProvider>
-    <MainLayoutInner />
-  </LoginGateProvider>
-);
+// The sign-in gate and pending-action resume are mounted once in AppShell.
+const MainLayout = () => <MainLayoutInner />;
 
 export default MainLayout;

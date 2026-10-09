@@ -100,24 +100,36 @@ const AuthProvider = ({ children }) => {
   };
 
   /**
-   * Request OTP — POST /api/auth/otp/request
+   * Request a sign-in code — POST /api/auth/otp/request. Customers sign in
+   * with their email address; the code is emailed to them.
+   *
+   * A refusal keeps its HTTP status and, when rate-limited, the server's
+   * Retry-After (seconds), so the resend countdown can respect it.
    */
-  const requestOtp = async (phone) => {
+  const requestOtp = async (email) => {
     try {
-      const res = await axios.post(`${apiBase}/auth/otp/request`, { phone });
+      const res = await axios.post(`${apiBase}/auth/otp/request`, { email });
       return res.data;
     } catch (error) {
-      throw error.response?.data || error;
+      const body = error.response?.data;
+      const retryAfter = Number(error.response?.headers?.["retry-after"]);
+      throw {
+        ...(body && typeof body === "object" ? body : { error: error.message }),
+        status: error.response?.status,
+        retryAfter: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+      };
     }
   };
 
   /**
-   * Verify OTP — POST /api/auth/otp/verify
+   * Verify a sign-in code — POST /api/auth/otp/verify. The response says
+   * whether the profile is complete (profileComplete / missing), so callers
+   * never have to infer it from the user record.
    */
-  const verifyOtp = async (phone, otp) => {
+  const verifyOtp = async (email, otp) => {
     setIsAuthLoading(true);
     try {
-      const res = await axios.post(`${apiBase}/auth/otp/verify`, { phone, otp });
+      const res = await axios.post(`${apiBase}/auth/otp/verify`, { email, otp });
       const { accessToken, refreshToken, user: userData } = res.data;
       storeTokens(accessToken, refreshToken);
       setUser(userData);

@@ -10,6 +10,7 @@ import toast from "react-hot-toast";
 import ImageZoomLens from "../../components/ImageZoomLens/ImageZoomLens";
 import { optimizeCloudinaryUrl } from "../../utils/cloudinaryImage";
 import { useLoginGate } from "../../context/LoginGateContext";
+import { useRegisterDialog } from "../../utils/dialogRegistry";
 import useTrackProductView from "../../hooks/useTrackProductView";
 
 const DynamicProduct = () => {
@@ -30,6 +31,11 @@ const DynamicProduct = () => {
   const [quoteMobile, setQuoteMobile] = useState("");
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [isImageZoomed, setIsImageZoomed] = useState(false);
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  // Both dialogs on this page tell the registry when they are open, so the
+  // timed sign-in prompt never appears on top of them.
+  useRegisterDialog("quote-modal", isQuoteModalOpen);
+  useRegisterDialog("image-zoom", isImageModalOpen);
 
   // Fetch this one product by id rather than pulling the whole catalogue and
   // filtering client-side. The old approach matched only on `_id`, so a URL
@@ -245,10 +251,10 @@ const DynamicProduct = () => {
               <ImageZoomLens
                 src={optimizeCloudinaryUrl(mainImage, { width: 800 }) || "https://placehold.co/800x800"}
                 alt={dynamicProduct.name} 
-                onClick={() => { setIsImageZoomed(false); document.getElementById('imageModal').showModal(); }}
+                onClick={() => { setIsImageZoomed(false); setIsImageModalOpen(true); document.getElementById('imageModal').showModal(); }}
               />
               <button 
-                onClick={() => { setIsImageZoomed(false); document.getElementById('imageModal').showModal(); }}
+                onClick={() => { setIsImageZoomed(false); setIsImageModalOpen(true); document.getElementById('imageModal').showModal(); }}
                 className="absolute top-4 right-4 bg-white/80 p-2 rounded-full backdrop-blur-sm hover:bg-white transition-colors"
               >
                 <span className="material-symbols-outlined text-primary">zoom_in</span>
@@ -514,7 +520,7 @@ const DynamicProduct = () => {
       )}
 
       {/* Image Zoom Modal */}
-      <dialog id="imageModal" className="modal">
+      <dialog id="imageModal" className="modal" onClose={() => setIsImageModalOpen(false)}>
         <div className="modal-box w-11/12 max-w-5xl bg-surface p-2 rounded-sm relative overflow-hidden h-[80vh]">
           <form method="dialog">
             <button
@@ -549,19 +555,6 @@ const DynamicProduct = () => {
         </form>
       </dialog>
 
-      {/* Login Prompt Modal (Existing structure) */}
-      <dialog id="takeToLoginModal" className="modal">
-        <div className="modal-box bg-surface border border-outline-variant/30 rounded-sm">
-          <h3 className="font-display-lg text-headline-sm text-primary mb-4">Please Login</h3>
-          <p className="font-body-base text-on-surface-variant">You need to login <span id="loginModalTextContent"></span></p>
-          <div className="modal-action">
-            <form method="dialog">
-              <button className="px-6 py-2 border border-outline text-on-surface hover:bg-surface-container transition-colors rounded-sm font-button-text mr-4">Cancel</button>
-              <Link to="/login" className="px-6 py-2 bg-primary text-white hover:bg-primary-container transition-colors rounded-sm font-button-text">Login</Link>
-            </form>
-          </div>
-        </div>
-      </dialog>
     </div>
   );
 };
