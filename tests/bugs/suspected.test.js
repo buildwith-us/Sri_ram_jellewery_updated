@@ -564,7 +564,7 @@ describe("S7 · admin changes to expired / cancelled / rejected orders (fixed �
 
 // ─── S8 ──────────────────────────────────────────────────────────────────────
 
-describe("S8 · malformed ObjectIds", () => {
+describe("S8 · malformed ObjectIds (fixed)", () => {
   const BAD = "not-an-object-id";
   const routes = {
     customer: [
@@ -601,19 +601,8 @@ describe("S8 · malformed ObjectIds", () => {
     return body ? t.send(body) : t;
   };
 
-  // Split after running: these return 500 today.
-  const BROKEN = new Set([
-    `get /api/orders/${BAD}`,
-    `patch /api/orders/${BAD}/cancel`,
-    `delete /api/reviews/${BAD}`,
-    `patch /api/orders/${BAD}/status`,
-    `patch /api/orders/${BAD}/approval`,
-    `patch /api/users/${BAD}`,
-    `delete /api/users/${BAD}`,
-    `patch /api/categories/${BAD}`,
-    `delete /api/categories/${BAD}`,
-    `patch /api/quotes/${BAD}/status`,
-  ]);
+  // These returned 500 before S8 was fixed; every route here is now a 404.
+  const BROKEN = new Set();
 
   for (const who of ["customer", "admin"]) {
     for (const route of routes[who]) {
@@ -623,9 +612,16 @@ describe("S8 · malformed ObjectIds", () => {
         const res = await call(who, route);
         expect(res.status).toBeGreaterThanOrEqual(400);
         expect(res.status).toBeLessThan(500);
+        expect(res.body.error).toMatch(/not found/i);
       });
     }
   }
+
+  it("S8: the 404 names the right thing (a bad address id is 'Address not found')", async () => {
+    const { token } = await makeCustomer();
+    expect((await ctx.api(token).delete(`/api/users/me/addresses/${BAD}`)).body.error).toBe("Address not found");
+    expect((await ctx.api(token).get(`/api/orders/${BAD}`)).body.error).toBe("Order not found");
+  });
 
   for (const route of routes.lookupByProductId) {
     it(`S8: ${route[0]} ${route[1]} → 200 deletedCount 0`, async () => {

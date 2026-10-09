@@ -3,13 +3,16 @@ import bcrypt from "bcrypt";
 import { User } from "../models/User.js";
 import { verifyJWT, requireAdmin } from "../middleware/auth.js";
 import mongoose from "mongoose";
-import { validate, updateProfileSchema, changePasswordSchema, shippingAddressSchema, adminUpdateUserSchema } from "../middleware/validate.js";
+import { validate, updateProfileSchema, changePasswordSchema, shippingAddressSchema, adminUpdateUserSchema, objectIdParam } from "../middleware/validate.js";
 import { normalizeIndianPhone } from "../utils/phone.js";
 import { profileStatus } from "../utils/profile.js";
 
 const BCRYPT_SALT_ROUNDS = 12;
 
 const router = express.Router();
+
+// Every :id here is an ObjectId; a malformed one is a 404, not a 500 (S8).
+router.param("id", objectIdParam((req) => (req.path.includes("/addresses/") ? "Address" : "User")));
 
 // Never sent back in any user response: the password hash, and the sign-in
 // code's hash and expiry. A bcrypt hash of a 6-digit code can be brute-forced

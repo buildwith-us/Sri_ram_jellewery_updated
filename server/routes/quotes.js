@@ -2,9 +2,12 @@ import express from "express";
 import { QuoteRequest } from "../models/QuoteRequest.js";
 import { verifyJWT, requireAdmin } from "../middleware/auth.js";
 import { sendWhatsAppAlert } from "../utils/whatsapp.js";
-import { validate, quoteRequestSchema, quoteStatusSchema } from "../middleware/validate.js";
+import { validate, quoteRequestSchema, quoteStatusSchema, objectIdParam } from "../middleware/validate.js";
 
 const router = express.Router();
+
+// Every :id here is an ObjectId; a malformed one is a 404, not a 500 (S8).
+router.param("id", objectIdParam("Quote request"));
 
 // POST /api/quotes — submit a quote request
 router.post("/", verifyJWT, validate(quoteRequestSchema), async (req, res) => {

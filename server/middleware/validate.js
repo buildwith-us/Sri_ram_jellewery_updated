@@ -318,3 +318,19 @@ export const shippingAddressSchema = z.object({
   number: z.string().max(25).optional(),
   country: z.string().max(100).optional(),
 }).passthrough();
+
+// ─── Route parameters ────────────────────────────────────────────────────────
+
+/**
+ * router.param handler for routes whose :id is a MongoDB ObjectId. A malformed
+ * id used to reach Mongoose and come back as a CastError → 500 (bug S8); it is
+ * now the same 404 a well-formed id for a missing record gets.
+ *
+ * Not for routes whose id may also be a human key (products' productId, cart
+ * and wishlist items) — those look up by either and handle both themselves.
+ */
+export const objectIdParam = (label) => (req, res, next, id) => {
+  if (/^[0-9a-fA-F]{24}$/.test(String(id))) return next();
+  const name = typeof label === "function" ? label(req) : label;
+  return res.status(404).json({ error: `${name} not found` });
+};

@@ -15,9 +15,13 @@ import {
   createOrderSchema,
   orderStatusSchema,
   orderApprovalSchema,
+  objectIdParam,
 } from "../middleware/validate.js";
 
 const router = express.Router();
+
+// Every :id here is an ObjectId; a malformed one is a 404, not a 500 (S8).
+router.param("id", objectIdParam("Order"));
 
 /**
  * A paid online order that will not be fulfilled — cancelled by the customer

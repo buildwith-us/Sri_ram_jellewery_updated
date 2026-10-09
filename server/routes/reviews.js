@@ -1,9 +1,12 @@
 import express from "express";
 import { Review } from "../models/Review.js";
 import { verifyJWT } from "../middleware/auth.js";
-import { validate, createReviewSchema } from "../middleware/validate.js";
+import { validate, createReviewSchema, objectIdParam } from "../middleware/validate.js";
 
 const router = express.Router();
+
+// Every :id here is an ObjectId; a malformed one is a 404, not a 500 (S8).
+router.param("id", objectIdParam("Review"));
 
 // GET /api/reviews/:productId — reviews for a specific product
 router.get("/:productId", async (req, res) => {

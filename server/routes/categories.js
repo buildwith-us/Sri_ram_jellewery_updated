@@ -1,9 +1,12 @@
 import express from "express";
 import { Category } from "../models/Category.js";
 import { verifyJWT, requireAdmin } from "../middleware/auth.js";
-import { validate, createCategorySchema, updateCategorySchema } from "../middleware/validate.js";
+import { validate, createCategorySchema, updateCategorySchema, objectIdParam } from "../middleware/validate.js";
 
 const router = express.Router();
+
+// Every :id here is an ObjectId; a malformed one is a 404, not a 500 (S8).
+router.param("id", objectIdParam("Category"));
 
 // GET /api/categories — list all categories
 router.get("/", async (req, res) => {
