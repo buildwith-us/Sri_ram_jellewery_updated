@@ -354,3 +354,103 @@ describe("UPI tile → the existing Razorpay flow", () => {
     expect(await Cart.countDocuments({ userId: String(customer.user._id) })).toBe(1);
   });
 });
+
+// B21: a customer who paid and never selected Complete Order kept a full bag,
+// and could check out and pay for the same pieces again.
+describe("B21 · the bag after a confirmed payment", () => {
+  const bagOf = async (customer) =>
+    (await ctx.api(customer.token).get("/api/cart")).body.map((l) => [l.productId, l.quantity]).sort();
+  const add = (customer, productId, quantity = 1) =>
+    ctx.api(customer.token).post("/api/cart").send({ productId, quantity });
+
+  const setup = async () => {
+    await seedCatalog();
+    const customer = await makeCustomer();
+    await add(customer, "gold-ring", 2);
+    await add(customer, "silver-anklet");
+    return customer;
+  };
+
+  it("verify takes exactly the paid items out of the bag; the rest stays", async () => {
+    const customer = await setup();
+    const created = await createPayment(customer.token, [{ productId: "gold-ring", quantity: 1 }]);
+    expect(await bagOf(customer)).toEqual([["gold-ring", 2], ["silver-anklet", 1]]); // not before payment
+    await verify(customer.token, created.body.razorpayOrderId, "pay_B21a");
+    expect(await bagOf(customer)).toEqual([["gold-ring", 1], ["silver-anklet", 1]]);
+  });
+
+  it("a whole-bag checkout empties the bag, with no Complete Order needed", async () => {
+    const customer = await setup();
+    const created = await createPayment(customer.token, [
+      { productId: "gold-ring", quantity: 2 },
+      { productId: "silver-anklet" },
+    ]);
+    await verify(customer.token, created.body.razorpayOrderId, "pay_B21b");
+    expect(await bagOf(customer)).toEqual([]);
+  });
+
+  it("the webhook alone clears it too (the tab was closed after paying)", async () => {
+    const customer = await setup();
+    const created = await createPayment(customer.token, [{ productId: "silver-anklet" }]);
+    expect((await webhook(webhookPayload(created.body.razorpayOrderId, "pay_B21c"))).status).toBe(200);
+    expect(await bagOf(customer)).toEqual([["gold-ring", 2]]);
+  });
+
+  it("confirming twice (verify then webhook) takes the items out once", async () => {
+    const customer = await setup();
+    const created = await createPayment(customer.token, [{ productId: "gold-ring", quantity: 1 }]);
+    await verify(customer.token, created.body.razorpayOrderId, "pay_B21d");
+    await webhook(webhookPayload(created.body.razorpayOrderId, "pay_B21d"));
+    expect(await bagOf(customer)).toEqual([["gold-ring", 1], ["silver-anklet", 1]]);
+  });
+
+  it("Buy Now leaves the whole bag untouched, even a line for the same piece", async () => {
+    const customer = await setup();
+    const created = await ctx.api(customer.token).post("/api/payment/create-order")
+      .send({ items: [{ productId: "gold-ring" }], shippingAddress: SHIPPING, name: "Asha", buyNow: true });
+    expect((await Order.findById(created.body.orderId).lean()).buyNow).toBe(true);
+    await verify(customer.token, created.body.razorpayOrderId, "pay_B21e");
+    expect((await Order.findById(created.body.orderId).lean()).paymentStatus).toBe("paid");
+    expect(await bagOf(customer)).toEqual([["gold-ring", 2], ["silver-anklet", 1]]);
+  });
+
+  it("only the payer's bag is touched", async () => {
+    const customer = await setup();
+    const other = await makeCustomer();
+    await add(other, "gold-ring", 3);
+    const created = await createPayment(customer.token, [{ productId: "gold-ring", quantity: 2 }]);
+    await verify(customer.token, created.body.razorpayOrderId, "pay_B21f");
+    expect(await bagOf(other)).toEqual([["gold-ring", 3]]);
+  });
+
+  it("a late payment for a sold-out piece (refund needed) leaves the bag alone", async () => {
+    const customer = await setup();
+    const created = await createPayment(customer.token, [{ productId: "gold-ring", quantity: 1 }]);
+    await Order.updateOne({ _id: created.body.orderId }, { createdAt: new Date(Date.now() - 60 * 60 * 1000) });
+    await releaseStaleReservations();
+    await Product.updateOne({ productId: "gold-ring" }, { stock: 0 });
+    await verify(customer.token, created.body.razorpayOrderId, "pay_B21g");
+    expect((await Order.findById(created.body.orderId).lean()).refundRequired).toBe(true);
+    expect(await bagOf(customer)).toEqual([["gold-ring", 2], ["silver-anklet", 1]]);
+  });
+
+  it("a late payment whose stock is still there goes ahead and clears the paid items", async () => {
+    const customer = await setup();
+    const created = await createPayment(customer.token, [{ productId: "silver-anklet" }]);
+    await Order.updateOne({ _id: created.body.orderId }, { createdAt: new Date(Date.now() - 60 * 60 * 1000) });
+    await releaseStaleReservations();
+    await webhook(webhookPayload(created.body.razorpayOrderId, "pay_B21h"));
+    expect((await Order.findById(created.body.orderId).lean()).orderStatus).toBe("processing");
+    expect(await bagOf(customer)).toEqual([["gold-ring", 2]]);
+  });
+
+  it("a bag line saved under the product's Mongo id is matched too", async () => {
+    await seedCatalog();
+    const customer = await makeCustomer();
+    const ring = await Product.findOne({ productId: "gold-ring" }).lean();
+    await add(customer, String(ring._id));
+    const created = await createPayment(customer.token, [{ productId: String(ring._id) }]);
+    await verify(customer.token, created.body.razorpayOrderId, "pay_B21i");
+    expect(await bagOf(customer)).toEqual([]);
+  });
+});

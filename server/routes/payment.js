@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { Order } from "../models/Order.js";
 import { User } from "../models/User.js";
 import { Product } from "../models/Product.js";
+import { Cart } from "../models/Cart.js";
 import { computePrice } from "../utils/computePrice.js";
 import { verifyJWT } from "../middleware/auth.js";
 import { sendOrderAlert, sendRefundRequiredAlert } from "../utils/whatsapp.js";
@@ -46,7 +47,7 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
       });
     }
 
-    const { items, shippingAddress, name } = req.body;
+    const { items, shippingAddress, name, buyNow } = req.body;
 
     if (!items || !items.length) {
       return res.status(400).json({ error: "Order must contain at least one item" });
@@ -183,6 +184,7 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
         orderStatus: "pending",
         paymentStatus: "pending",
         stockReserved: true,
+        buyNow: Boolean(buyNow),
       };
       // A clash with a number already stored takes the next one (the
       // Razorpay receipt then names the first; razorpayOrderId links them).
@@ -231,6 +233,38 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
  *
  * @returns {{order: Object|null, alreadyConfirmed: boolean}}
  */
+/**
+ * Take what was just paid for out of the customer's bag (B21).
+ *
+ * Done here, at confirmation, rather than when the customer selects Complete
+ * Order: a customer who paid and closed the tab used to keep a full bag and
+ * could check out and pay for the same pieces again. The webhook confirms
+ * that case too, so it is covered without the browser.
+ *
+ * Only the paid quantities go; anything else in the bag stays. A "Buy Now"
+ * purchase never came from the bag, so it touches nothing — the same rule as
+ * the COD route. Never the reason a confirmation fails.
+ */
+const clearPaidItemsFromBag = async (order) => {
+  if (order.buyNow) return;
+  try {
+    const keys = order.items.map((i) => String(i.productId));
+    const products = await Product.find({ productId: { $in: keys } }).select("_id productId").lean();
+    for (const item of order.items) {
+      const product = products.find((p) => p.productId === String(item.productId));
+      const ids = [String(item.productId), product && String(product._id)].filter(Boolean);
+      const line = await Cart.findOneAndUpdate(
+        { userId: order.userId, productId: { $in: ids } },
+        { $inc: { quantity: -(item.quantity || 1) } },
+        { new: true }
+      );
+      if (line && line.quantity <= 0) await Cart.deleteOne({ _id: line._id });
+    }
+  } catch (err) {
+    console.error(`Clearing the bag for ${order.orderId} failed (non-critical):`, err.message);
+  }
+};
+
 const confirmPayment = async ({ razorpayOrderId, razorpayPaymentId, source }) => {
   const order = await Order.findOneAndUpdate(
     { razorpayOrderId, paidAt: null },
@@ -254,6 +288,7 @@ const confirmPayment = async ({ razorpayOrderId, razorpayPaymentId, source }) =>
     }
 
     console.log(`💰 Payment confirmed for ${order.orderId} via ${source}.`);
+    await clearPaidItemsFromBag(order);
     // Only a confirmed payment is worth waking the owner for, and only once.
     sendOrderAlert({ order }).catch((err) =>
       console.error("Owner order alert failed (non-critical):", err.message)
@@ -301,6 +336,7 @@ const reclaimForLatePayment = async ({ order, source }) => {
     sendOrderAlert({ order: revived }).catch((err) =>
       console.error("Owner order alert failed (non-critical):", err.message)
     );
+    await clearPaidItemsFromBag(revived);
     return { order: revived, alreadyConfirmed: false, reclaimed: true };
   }
 
@@ -320,6 +356,9 @@ const reclaimForLatePayment = async ({ order, source }) => {
     `🚨 REFUND REQUIRED — ${order.orderId}: payment captured via ${source} after expiry, ` +
       `but ${reservation.product} is out of stock. Money taken with nothing to ship.`
   );
+
+  // The bag is deliberately left alone: this order is not going ahead, so the
+  // customer has bought nothing and keeps what they had chosen (B21).
 
   // Unlike a routine expiry, this one wakes the owner. It is money held against
   // an order that cannot be fulfilled.

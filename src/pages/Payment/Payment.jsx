@@ -40,7 +40,7 @@ const Payment = () => {
   const customerName = user?.name || userFromDB?.name || user?.displayName || "Customer";
   // Items come from the checkout context, never from the cart directly — the
   // cart is not what is being bought when the customer used "Buy Now".
-  const { orderTotal, checkoutItems, setPaymentInfo } = useContext(PaymentContext);
+  const { orderTotal, checkoutItems, isBuyNow, setPaymentInfo } = useContext(PaymentContext);
 
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [loadingPayment, setLoadingPayment] = useState(false);
@@ -135,6 +135,9 @@ const Payment = () => {
           items: checkoutItems,
           shippingAddress: userFromDB?.shippingAddress,
           name: customerName,
+          // Tells the server to leave the bag alone when this payment is
+          // confirmed (B21): a Buy Now never came from it.
+          buyNow: Boolean(isBuyNow),
         });
         orderId = response.data?.razorpayOrderId;
         amount = response.data?.amount;

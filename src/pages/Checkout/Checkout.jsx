@@ -100,15 +100,10 @@ const Checkout = () => {
         refetch();
       };
 
-      // A "Buy Now" checkout never involved the cart, so clearing it here would
-      // silently discard items the customer had not bought yet. This mirrors
-      // the COD path, where the backend skips the cart wipe when buyNow is set.
-      if (buyNowItem) {
-        goToConfirmation();
-        return;
-      }
-
-      axiosSecure.delete("/orders/delete-cart-items").then(goToConfirmation);
+      // The server took the paid items out of the bag when it confirmed the
+      // payment (B21), and left it alone for a Buy Now — so nothing is
+      // cleared here; the refetch shows the bag as it now is.
+      goToConfirmation();
       return;
     }
 

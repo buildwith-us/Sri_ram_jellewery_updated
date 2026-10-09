@@ -56,6 +56,10 @@ const OrderSchema = new mongoose.Schema({
   // ship. Needs a human and a refund, so it is a flag rather than a status.
   refundRequired: { type: Boolean, default: false },
 
+  // A "Buy Now" checkout: bought outside the bag, so confirming its payment
+  // must leave the bag alone (B21). COD orders read this from the request.
+  buyNow: { type: Boolean, default: false },
+
   // Razorpay (PRD §4.1)
   razorpayOrderId: { type: String },
   razorpayPaymentId: { type: String },
