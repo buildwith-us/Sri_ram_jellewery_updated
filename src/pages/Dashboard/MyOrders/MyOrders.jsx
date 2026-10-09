@@ -26,11 +26,13 @@ const MyOrders = () => {
       });
     } else {
       // A paid online order is refunded by hand by the shop — say so before
-      // the customer commits, and never promise an instant refund.
+      // the customer commits, and never promise an instant refund. No
+      // timeline either until the owner confirms one: the cancellation policy
+      // still lists it as an open question.
       const paidOnline = Boolean(order.paidAt) && String(order.paymentMethod || "").toLowerCase() !== "cod";
       const amount = `₹${Number(order.totalAmount || 0).toLocaleString("en-IN")}`;
       const refundNote = paidOnline
-        ? `<br><br>You paid ${amount} online. The shop refunds it to your original payment method <b>by hand</b>; once issued, a refund usually reaches you within <b>5–7 working days</b>. It is not instant.`
+        ? `<br><br>You paid ${amount} online. The shop refunds it to your original payment method <b>by hand</b> — it is not instant — and will contact you about your refund.`
         : "";
       Swal.fire({
         title: "Cancel Order?",
@@ -49,7 +51,7 @@ const MyOrders = () => {
                 Swal.fire({
                   title: "Cancelled",
                   text: paidOnline
-                    ? `Your order has been cancelled. Your refund of ${amount} is pending: the shop will issue it by hand, and it usually reaches you within 5–7 working days after that.`
+                    ? `Your order has been cancelled. Your refund of ${amount} is pending: the shop processes it by hand and will contact you about it.`
                     : "Your order has been cancelled successfully",
                   icon: "success",
                   confirmButtonColor: "#8B6447",
@@ -146,7 +148,7 @@ const MyOrders = () => {
               // and the shop does it by hand. Never shown as "Refunded".
               timelineText =
                 `Cancelled — refund pending. The shop will refund ₹${Number(order.totalAmount || 0).toLocaleString("en-IN")} ` +
-                "to your original payment method by hand. Once it's issued, it usually reaches you within 5–7 working days.";
+                "to your original payment method by hand, and will contact you about it.";
             } else if (isDelivered) {
               timelineText = `Delivered on ${deliveredOn || "—"}`;
             } else if (isRejected) {
