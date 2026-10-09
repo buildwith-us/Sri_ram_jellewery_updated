@@ -151,11 +151,18 @@ describe("S1 · PATCH /api/users/:id passed req.body straight to findByIdAndUpda
     expect(res.body.error).toMatch(/at least one administrator/);
   });
 
-  bug("S1d: the last admin cannot delete themselves", async () => {
+  it("S1d: the last admin cannot delete themselves", async () => {
     const admin = await makeAdmin();
     const res = await ctx.api(admin.token).delete(`/api/users/${admin.user._id}`);
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(await User.countDocuments({ role: "ADMIN" })).toBe(1);
+  });
+
+  it("S1d: another admin can be deleted while one with a password remains", async () => {
+    const a1 = await makeAdmin();
+    const a2 = await makeAdmin();
+    expect((await ctx.api(a1.token).delete(`/api/users/${a2.user._id}`)).status).toBe(200);
+    expect((await ctx.api(a1.token).delete(`/api/users/${a1.user._id}`)).status).toBe(400);
   });
 
   it("S1e: an invalid role is refused", async () => {

@@ -327,6 +327,12 @@ router.patch("/:id", verifyJWT, requireAdmin, validate(adminUpdateUserSchema), a
 router.delete("/:id", verifyJWT, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+    const target = await User.findById(id);
+    if (!target) return res.status(404).json({ error: "User not found" });
+    // Deleting the last administrator would lock everyone out of the dashboard.
+    if (await isLastUsableAdmin(target)) {
+      return res.status(400).json({ error: LAST_ADMIN_ERROR });
+    }
     const deleted = await User.findByIdAndDelete(id);
     if (!deleted) return res.status(404).json({ error: "User not found" });
     res.json({ success: true, message: "User deleted" });
