@@ -712,6 +712,102 @@ const runTimedPromptFlow = async (browser, viewport, seeded) => {
   return context;
 };
 
+/**
+ * A signed-in customer always has a name and a phone: the details step that
+ * follows the code cannot be skipped from the modal or the sign-in pages, and
+ * a session with an incomplete profile is asked again on any page.
+ */
+const runProfileGateFlow = async (browser, viewport, seeded) => {
+  const context = await newContext(browser, viewport);
+  const page = await context.newPage();
+  const p4 = seeded.p4;
+  const dialog = () => page.getByRole("dialog");
+  const modalEmail = freshEmail(`gate-${viewport}`);
+  const pageEmail = freshEmail(`gate-page-${viewport}`);
+
+  // Email and code only, stopping at the details step.
+  const reachDetails = async (prefix, email) => {
+    await page.locator(`#${prefix}-email`).fill(email);
+    await page.getByRole("button", { name: /^send code$/i }).click();
+    await page.locator(`#${prefix}-code`).waitFor({ timeout: 10_000 });
+    await page.locator(`#${prefix}-code`).fill(await codeFor(email));
+    await page.getByRole("button", { name: /verify & continue/i }).click();
+    await page.locator(`#${prefix}-name`).waitFor({ timeout: 10_000 });
+  };
+  const waitForToken = async (want) => {
+    for (let i = 0; i < 30; i++) {
+      if (Boolean(await tokenOf(page)) === want) return true;
+      await page.waitForTimeout(200);
+    }
+    return false;
+  };
+
+  await flow(viewport, "Details step can't be skipped", page, [
+    ["Modal: closing the details step signs the new customer out", async () => {
+      await goto(page, `/products/${p4._id}/description`);
+      await dismissNudge(page);
+      await page.getByRole("button", { name: /add to bag/i }).click();
+      await dialog().waitFor({ timeout: 5_000 });
+      await reachDetails("auth-modal", modalEmail);
+      await page.getByText(/closing this signs you out/i).waitFor({ timeout: 3_000 });
+      // The ✕ says what it does here. Closed with Esc (the same dismiss path):
+      // with the icon font blocked, the phone-width header overflows and the
+      // ✕ sits outside the 390px viewport.
+      expectTrue(await page.getByRole("button", { name: /close and sign out/i }).count() === 1, "the close button doesn't say it signs out");
+      await page.keyboard.press("Escape");
+      await dialog().waitFor({ state: "detached", timeout: 5_000 });
+      expectTrue(await waitForToken(false), "still signed in after closing the details step");
+      await page.getByText(/we need your name and mobile number/i).first().waitFor({ timeout: 5_000 });
+    }],
+    ["Signing in again asks for the details again; then the bag action resumes", async () => {
+      await page.getByRole("button", { name: /add to bag/i }).click();
+      await dialog().waitFor({ timeout: 5_000 });
+      const asked = await signInWithEmail(page, modalEmail);
+      expectTrue(asked, "a customer who skipped the details was not asked again");
+      await dialog().waitFor({ state: "detached", timeout: 10_000 });
+      const token = await tokenOf(page);
+      let cart = [];
+      for (let i = 0; i < 20 && !cart.length; i++) {
+        cart = (await api("GET", "/cart", { token })).body;
+        if (!cart.length) await page.waitForTimeout(300);
+      }
+      expectTrue(cart.length === 1 && cart[0].productId === p4.productId, `bag: ${JSON.stringify(cart)}`);
+      await page.evaluate(() => localStorage.clear());
+    }],
+    ["/login: walking away from the details step brings it back on the next page", async () => {
+      await goto(page, "/login");
+      await reachDetails("auth-page", pageEmail);
+      await goto(page, "/shop");
+      await page.locator("#auth-modal-name").waitFor({ timeout: 10_000 });
+      expectTrue(await dialog().isVisible(), "no details dialog on the next page");
+    }],
+    ["A reload asks again, prefilled with what the account has; a bad number is refused", async () => {
+      const token = await tokenOf(page);
+      expectTrue((await api("PATCH", "/users/me", { token, body: { name: "Half Done" } })).status === 200, "PATCH name");
+      await page.reload();
+      await page.locator("#auth-modal-name").waitFor({ timeout: 10_000 });
+      const name = await page.locator("#auth-modal-name").inputValue();
+      expectTrue(name === "Half Done", `name not prefilled: "${name}"`);
+      await page.locator("#auth-modal-phone").fill("12345");
+      await page.getByRole("button", { name: /^continue$/i }).click();
+      await dialog().getByRole("alert").waitFor({ timeout: 5_000 });
+      expectTrue(await dialog().isVisible(), "an invalid phone closed the dialog");
+    }],
+    ["Valid details save once; the next reload asks nothing", async () => {
+      const phone = freshPhone();
+      await page.locator("#auth-modal-phone").fill(phone);
+      await page.getByRole("button", { name: /^continue$/i }).click();
+      await dialog().waitFor({ state: "detached", timeout: 10_000 });
+      const me = (await api("GET", "/users/me", { token: await tokenOf(page) })).body.data;
+      expectTrue(me.profileComplete === true && me.phone === `+91${phone}` && me.name === "Half Done", `profile: ${JSON.stringify({ name: me.name, phone: me.phone, complete: me.profileComplete })}`);
+      await page.reload();
+      await page.waitForTimeout(3_000);
+      expectTrue(!(await dialog().isVisible()), "asked again after the profile was complete");
+    }],
+  ]);
+  return context;
+};
+
 const runAdminFlows = async (browser, viewport, shared) => {
   const context = await newContext(browser, viewport);
   const page = await context.newPage();
@@ -902,6 +998,7 @@ const main = async () => {
       const ctxs = [];
       ctxs.push(await runCustomerFlows(browser, viewport, seeded, shared));
       ctxs.push(await runTimedPromptFlow(browser, viewport, seeded));
+      ctxs.push(await runProfileGateFlow(browser, viewport, seeded));
       ctxs.push(await runAdminFlows(browser, viewport, shared));
       ctxs.push(await runLegalPages(browser, viewport));
       for (const c of ctxs) await c.close();

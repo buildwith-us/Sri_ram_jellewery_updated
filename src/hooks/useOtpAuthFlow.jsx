@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
+import { useQueryClient } from "react-query";
 import useAuthContext from "./useAuthContext";
 import { getApiBaseUrl } from "../utils/apiConfig";
 import { getErrorMessage } from "../utils/errorMessage";
@@ -19,13 +20,21 @@ export const RESEND_COOLDOWN_SECONDS = 30;
  * Every request goes through AuthProvider (requestOtp / verifyOtp) — this hook
  * holds only UI state. `onSignedIn({ isNewAccount })` fires once at the end:
  * after the code for a returning customer, after the details for a new one.
+ *
+ * The session already exists at "details" (it is issued with the code), so
+ * the containers make that step unskippable: closing it signs out, and a
+ * signed-in customer whose profile is incomplete is sent straight back to it
+ * (startDetails) — see LoginGateContext.
  */
 const useOtpAuthFlow = ({ onSignedIn } = {}) => {
   const { requestOtp, verifyOtp, refreshAccessToken, getAccessToken } = useAuthContext();
+  const queryClient = useQueryClient();
 
   const [step, setStep] = useState("email");
   const [email, setEmail] = useState("");
   const [missing, setMissing] = useState([]);
+  // What the account already holds, to prefill the details step.
+  const [prefill, setPrefill] = useState({ name: "", phone: "" });
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [resendIn, setResendIn] = useState(0);
@@ -41,9 +50,20 @@ const useOtpAuthFlow = ({ onSignedIn } = {}) => {
     setStep("email");
     setEmail("");
     setMissing([]);
+    setPrefill({ name: "", phone: "" });
     setError(null);
     setBusy(false);
     setResendIn(0);
+  }, []);
+
+  /** Open straight at "details" for a signed-in customer with gaps. */
+  const startDetails = useCallback(({ email: address = "", missing: gaps, name = "", phone = "" } = {}) => {
+    setEmail(address);
+    setMissing(gaps?.length ? gaps : ["name", "phone"]);
+    setPrefill({ name: name || "", phone: phone || "" });
+    setError(null);
+    setBusy(false);
+    setStep("details");
   }, []);
 
   // Show the server's own words when it refuses, and when it is a rate limit
@@ -96,6 +116,7 @@ const useOtpAuthFlow = ({ onSignedIn } = {}) => {
       const result = await verifyOtp(email, String(otp || "").trim());
       if (result.profileComplete === false) {
         setMissing(result.missing || ["name", "phone"]);
+        setPrefill({ name: result.user?.name || "", phone: result.user?.phone || "" });
         setStep("details");
       } else {
         onSignedIn?.({ isNewAccount: false, user: result.user });
@@ -118,6 +139,9 @@ const useOtpAuthFlow = ({ onSignedIn } = {}) => {
       );
       // Re-issue the session so the token (and the header) carry the name.
       await refreshAccessToken();
+      // The profile everything else reads (useUserInfo) must say "complete"
+      // before the flow ends, or the gate would ask again straight away.
+      await queryClient.refetchQueries(["user"]);
       onSignedIn?.({ isNewAccount: true });
     } catch (err) {
       // e.g. 409 — the number already belongs to another account.
@@ -136,6 +160,7 @@ const useOtpAuthFlow = ({ onSignedIn } = {}) => {
     step,
     email,
     missing,
+    prefill,
     error,
     busy,
     resendIn,
@@ -145,6 +170,7 @@ const useOtpAuthFlow = ({ onSignedIn } = {}) => {
     resend,
     submitDetails,
     changeEmail,
+    startDetails,
   };
 };
 

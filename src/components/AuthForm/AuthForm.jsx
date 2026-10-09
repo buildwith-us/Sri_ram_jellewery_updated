@@ -83,7 +83,7 @@ const AuthForm = ({ helmetTitle, heroEyebrow, heroHeadline, bottomText, bottomLi
             </div>
           )}
 
-          <OtpAuthSteps key={flow.step === "email" ? "email" : flow.email} flow={flow} idPrefix="auth-page" />
+          <OtpAuthSteps key={`${flow.step}:${flow.email}`} flow={flow} idPrefix="auth-page" />
 
           {flow.step === "email" && bottomLinkTo && (
             <p className="text-center mt-8 font-body-base text-sm text-on-surface-variant">

@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import AuthModal from "../components/AuthModal/AuthModal";
 import useAuthContext from "../hooks/useAuthContext";
+import useUserInfo from "../hooks/useUserInfo";
 import { isAnyDialogOpen } from "../utils/dialogRegistry";
 
 const LoginGateContext = createContext(null);
@@ -64,6 +65,9 @@ const markShownThisSession = () => safe(() => sessionStorage.setItem(SHOWN_THIS_
 
 const isPromptPath = (pathname) => !NO_PROMPT_PATHS.some((re) => re.test(pathname));
 
+// The sign-in pages run the details step themselves, in the page.
+const AUTH_PAGE_PATHS = /^\/(login|register)(\/|$)/;
+
 /**
  * The sign-in gate. Mounted ONCE, at the app root (layouts/AppShell), so the
  * modal, its timer and the pending action survive moving between the main
@@ -76,12 +80,27 @@ const isPromptPath = (pathname) => !NO_PROMPT_PATHS.some((re) => re.test(pathnam
  *   - the timed prompt — once per session, after AUTH_PROMPT_DELAY_MS of
  *     active (visible-tab) time, never on NO_PROMPT_PATHS, never over another
  *     dialog, and not again for 7 days once dismissed.
+ *
+ * And one rule: a signed-in customer always has a name and a phone. The
+ * session is issued with the code, before the details step, so leaving that
+ * step (closing the modal, or walking off /login) used to leave a customer
+ * signed in without them, and a restored session never asked again. Now the
+ * profile is checked whenever a customer is signed in — on sign-in, reload or
+ * session restore — and if it is incomplete the details step opens, on any
+ * page but the sign-in pages (which show it themselves). Closing it signs out.
  */
 export const LoginGateProvider = ({ children }) => {
-  const { user, isAuthLoading } = useAuthContext();
+  const { user, isAuthLoading, logOut } = useAuthContext();
+  const [profile] = useUserInfo();
   const location = useLocation();
   const navigate = useNavigate();
-  const [modal, setModal] = useState({ open: false, message: "" });
+  const [modal, setModal] = useState({ open: false, message: "", profilePrompt: null });
+  const signingOutRef = useRef(false);
+
+  // Customers only: an administrator's account has no delivery details.
+  const profileIncomplete = Boolean(user && profile?.role === "USER" && profile.profileComplete === false);
+  // Signed in, profile not loaded yet — don't resume anything until it is.
+  const profilePending = Boolean(user && !profile);
 
   const pathRef = useRef(location.pathname);
   pathRef.current = location.pathname;
@@ -93,7 +112,7 @@ export const LoginGateProvider = ({ children }) => {
   const requireLogin = useCallback(({ message, intent } = {}) => {
     if (userRef.current) return;
     if (intent) savePendingAction(intent);
-    setModal({ open: true, message: message || "" });
+    setModal({ open: true, message: message || "", profilePrompt: null });
   }, []);
 
   // ── Timed prompt: count only time the tab is visible ────────────────────
@@ -125,7 +144,7 @@ export const LoginGateProvider = ({ children }) => {
       if (userRef.current || !isPromptPath(pathRef.current) || isAnyDialogOpen() || dismissedRecently()) return;
       done = true;
       markShownThisSession();
-      setModal({ open: true, message: "" });
+      setModal({ open: true, message: "", profilePrompt: null });
     }, 1000);
 
     document.addEventListener("visibilitychange", onVisibility);
@@ -135,32 +154,73 @@ export const LoginGateProvider = ({ children }) => {
     };
   }, [user, isAuthLoading]);
 
-  const handleDismiss = useCallback(({ signedInMidFlow } = {}) => {
-    setModal({ open: false, message: "" });
-    // Declining to sign in also declines the action that asked for it.
-    if (!signedInMidFlow) {
+  // ── Incomplete profile: back to the details step ──────────────────────
+  useEffect(() => {
+    if (!profileIncomplete || modal.open || signingOutRef.current) return;
+    if (AUTH_PAGE_PATHS.test(location.pathname)) return;
+    setModal({
+      open: true,
+      message: "",
+      profilePrompt: {
+        email: profile.email || "",
+        missing: profile.missing,
+        name: profile.name || "",
+        phone: profile.phone || "",
+      },
+    });
+  }, [profileIncomplete, modal.open, location.pathname, profile]);
+
+  useEffect(() => {
+    if (!user) signingOutRef.current = false;
+  }, [user]);
+
+  const handleDismiss = useCallback(
+    ({ signedInMidFlow } = {}) => {
+      setModal({ open: false, message: "", profilePrompt: null });
+      // Declining to sign in also declines the action that asked for it.
+      if (!signedInMidFlow) {
+        clearPendingAction();
+        rememberDismissal();
+        return;
+      }
+      // Closed at the details step: no session without a name and a phone.
+      signingOutRef.current = true;
       clearPendingAction();
-      rememberDismissal();
-    }
-  }, []);
+      logOut().then(() =>
+        toast("You're signed out. We need your name and mobile number to finish setting up your account.")
+      );
+    },
+    [logOut]
+  );
 
   const handleComplete = useCallback(
     ({ isNewAccount } = {}) => {
-      setModal({ open: false, message: "" });
+      const wasProfilePrompt = Boolean(modal.profilePrompt);
+      setModal({ open: false, message: "", profilePrompt: null });
       if (readPendingAction()) return; // useResumePendingAction finishes what they started
+      if (wasProfilePrompt) {
+        toast.success("Thank you — your details are saved.");
+        return;
+      }
       if (isNewAccount) {
         navigate("/welcome", { state: { from: fromRef.current } });
       } else {
         toast.success("You're signed in");
       }
     },
-    [navigate]
+    [navigate, modal.profilePrompt]
   );
 
   return (
-    <LoginGateContext.Provider value={{ requireLogin, isAuthFlowOpen: modal.open }}>
+    <LoginGateContext.Provider value={{ requireLogin, isAuthFlowOpen: modal.open || profileIncomplete || profilePending }}>
       {children}
-      <AuthModal isOpen={modal.open} message={modal.message} onDismiss={handleDismiss} onComplete={handleComplete} />
+      <AuthModal
+        isOpen={modal.open}
+        message={modal.message}
+        profilePrompt={modal.profilePrompt}
+        onDismiss={handleDismiss}
+        onComplete={handleComplete}
+      />
     </LoginGateContext.Provider>
   );
 };

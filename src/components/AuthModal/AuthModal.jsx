@@ -14,8 +14,13 @@ const FOCUSABLE =
  * Accessibility: role="dialog" + aria-modal, labelled by its heading; focus
  * moves into it on open and back to whatever had it on close; Tab and
  * Shift+Tab are trapped inside; Esc closes; the page behind cannot scroll.
+ *
+ * `profilePrompt` ({ email, missing, name, phone }) opens it straight at the
+ * details step, for a signed-in customer whose profile is incomplete. At that
+ * step the customer is already signed in, so closing signs them out — the
+ * details cannot be skipped.
  */
-const AuthModal = ({ isOpen, message, onDismiss, onComplete }) => {
+const AuthModal = ({ isOpen, message, profilePrompt, onDismiss, onComplete }) => {
   const flow = useOtpAuthFlow({ onSignedIn: onComplete });
   const panelRef = useRef(null);
   const returnFocusRef = useRef(null);
@@ -25,7 +30,8 @@ const AuthModal = ({ isOpen, message, onDismiss, onComplete }) => {
   useLayoutEffect(() => {
     if (!isOpen) return undefined;
     returnFocusRef.current = document.activeElement;
-    flow.reset();
+    if (profilePrompt) flow.startDetails(profilePrompt);
+    else flow.reset();
     const { overflow, paddingRight } = document.body.style;
     const scrollbar = window.innerWidth - document.documentElement.clientWidth;
     document.body.style.overflow = "hidden";
@@ -74,6 +80,7 @@ const AuthModal = ({ isOpen, message, onDismiss, onComplete }) => {
   };
 
   const heading = stepHeading(flow);
+  const closeSignsOut = flow.step === "details";
 
   return createPortal(
     <div
@@ -94,7 +101,7 @@ const AuthModal = ({ isOpen, message, onDismiss, onComplete }) => {
         <button
           type="button"
           onClick={dismiss}
-          aria-label="Close sign-in"
+          aria-label={closeSignsOut ? "Close and sign out" : "Close sign-in"}
           className="absolute top-3 right-3 w-11 h-11 flex items-center justify-center text-primary/70 hover:text-primary transition-colors material-symbols-outlined text-[20px]"
         >
           close
@@ -111,7 +118,12 @@ const AuthModal = ({ isOpen, message, onDismiss, onComplete }) => {
           </p>
         </div>
 
-        <OtpAuthSteps key={flow.step === "email" ? "email" : flow.email} flow={flow} idPrefix="auth-modal" />
+        <OtpAuthSteps key={`${flow.step}:${flow.email}`} flow={flow} idPrefix="auth-modal" />
+        {closeSignsOut && (
+          <p className="text-center text-on-surface-variant/80 text-xs mt-6">
+            We need these to deliver your order. Closing this signs you out.
+          </p>
+        )}
       </div>
     </div>,
     document.body

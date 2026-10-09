@@ -38,8 +38,8 @@ const Spinner = () => <span className="loading loading-spinner loading-md" aria-
 const OtpAuthSteps = ({ flow, idPrefix = "auth" }) => {
   const [emailValue, setEmailValue] = useState(flow.email || "");
   const [code, setCode] = useState("");
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const [name, setName] = useState(flow.prefill?.name || "");
+  const [phone, setPhone] = useState(flow.prefill?.phone || "");
   const id = (s) => `${idPrefix}-${s}`;
 
   return (
