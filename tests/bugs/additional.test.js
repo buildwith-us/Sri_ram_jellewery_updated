@@ -576,8 +576,8 @@ describe("B17 · z.coerce.boolean() reads the string 'false' as true", () => {
 
 // ─── B18 ─────────────────────────────────────────────────────────────────────
 
-describe("B18 · approving a cancelled order", () => {
-  bug("B18: a customer-cancelled order cannot then be approved by the owner", async () => {
+describe("B18 · approving a cancelled order (fixed — utils/orderStatus.js)", () => {
+  it("B18: a customer-cancelled order cannot then be approved by the owner", async () => {
     await seedCatalog();
     const c = await makeCustomer();
     const admin = await makeAdmin();

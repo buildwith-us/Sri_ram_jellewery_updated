@@ -8,6 +8,7 @@ import { getRateStatus, findUnpriceableMetalsForProducts, rateUnavailableMessage
 import { verifyJWT, requireAdmin } from "../middleware/auth.js";
 import { sendOrderAlert, sendOrderApprovalAlert } from "../utils/whatsapp.js";
 import { reserveStock, releaseStock, outOfStockMessage } from "../utils/stock.js";
+import { checkStatusChange, checkApprove, checkReject } from "../utils/orderStatus.js";
 import {
   validate,
   createOrderSchema,
@@ -20,10 +21,6 @@ const router = express.Router();
 // How long after the owner approves an order it is promised for delivery.
 // Single source of truth — the client displays this date, it never computes it.
 export const DELIVERY_WINDOW_DAYS = 15;
-
-// Statuses an order may not reach until the owner has approved it. "processing"
-// is the resting state of a new order, and "cancelled" must stay available.
-const REQUIRES_APPROVAL = ["shipped", "delivered"];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -228,15 +225,22 @@ router.patch("/:id/status", verifyJWT, requireAdmin, validate(orderStatusSchema)
       return res.status(404).json({ error: "Order not found" });
     }
 
-    // Enforced here rather than only in the admin UI: an unapproved order has
-    // no delivery window, so it must not be able to reach a fulfilment status.
-    if (REQUIRES_APPROVAL.includes(status) && order.approvalStatus !== "APPROVED") {
-      return res.status(400).json({
-        error: "Approve this order before marking it shipped or delivered",
-      });
-    }
+    // The lifecycle table (utils/orderStatus.js) decides, not this handler:
+    // end states stay ended, nothing moves backwards, and shipped/delivered
+    // need the owner's approval.
+    const verdict = checkStatusChange(order, status);
+    if (!verdict.ok) return res.status(400).json({ error: verdict.error });
+    if (verdict.noop) return res.json({ success: true, data: order });
 
     order.orderStatus = status;
+
+    // Cancelling puts the pieces back on sale — the same release the customer
+    // cancel and the owner rejection make, guarded by the same flag so it can
+    // only ever happen once per order.
+    if (status === "cancelled" && order.stockReserved) {
+      await releaseStock(order.items);
+      order.stockReserved = false;
+    }
 
     // Stamped once, on the first transition into delivered, so re-saving a
     // delivered order does not move the date the customer was shown.
@@ -262,16 +266,12 @@ router.patch("/:id/approval", verifyJWT, requireAdmin, validate(orderApprovalSch
       return res.status(404).json({ error: "Order not found" });
     }
 
-    // Idempotent guard: re-approving would silently push the promised delivery
-    // date back, after the customer has already been shown the first one.
-    if (order.approvalStatus === approvalStatus) {
-      return res.status(400).json({
-        error: `This order is already ${approvalStatus.toLowerCase()}`,
-      });
-    }
-    if (order.approvalStatus === "APPROVED" && approvalStatus === "REJECTED") {
-      return res.status(400).json({ error: "An approved order cannot be rejected" });
-    }
+    // The lifecycle table decides. Among other things: re-approving would move
+    // the promised delivery date after the customer has seen it; a rejected
+    // order has released its stock and cannot be approved; an expired,
+    // cancelled or unpaid online order cannot be approved at all.
+    const verdict = approvalStatus === "APPROVED" ? checkApprove(order) : checkReject(order);
+    if (!verdict.ok) return res.status(400).json({ error: verdict.error });
 
     if (approvalStatus === "APPROVED") {
       const approvedAt = new Date();

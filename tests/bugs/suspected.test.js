@@ -221,7 +221,7 @@ describe("S2 · POST /api/orders accepted any paymentMethod (fixed)", () => {
 
   // Not part of S2's fix: approval rules are Batch 2. The unpaid online order
   // now comes from create-order, the only route that can still make one.
-  bug("S2d: an unpaid online order cannot be approved and shipped", async () => {
+  it("S2d: an unpaid online order cannot be approved and shipped", async () => {
     await seedCatalog();
     const c = await makeCustomer();
     const created = await ctx.api(c.token).post("/api/payment/create-order").send({ items: [{ productId: "gold-ring" }], shippingAddress: SHIPPING });
@@ -414,24 +414,24 @@ describe("S6 · orderId is ORD-${Date.now()} with a unique index", () => {
 
 // ─── S7 ──────────────────────────────────────────────────────────────────────
 
-describe("S7 · admin changes to expired / cancelled / rejected orders", () => {
+describe("S7 · admin changes to expired / cancelled / rejected orders (fixed — utils/orderStatus.js)", () => {
   const admin = () => makeAdmin();
 
-  bug("S7a: an expired order cannot be approved", async () => {
+  it("S7a: an expired order cannot be approved", async () => {
     const a = await admin();
     const o = await insertOrder({ orderStatus: "expired", paymentStatus: "expired", paymentMethod: "razorpay", stockReserved: false, expiredAt: new Date() });
     const res = await ctx.api(a.token).patch(`/api/orders/${o._id}/approval`).send({ approvalStatus: "APPROVED" });
     expect(res.status).toBe(400);
   });
 
-  bug("S7b: an expired order cannot be moved to shipped/delivered", async () => {
+  it("S7b: an expired order cannot be moved to shipped/delivered", async () => {
     const a = await admin();
     const o = await insertOrder({ orderStatus: "expired", approvalStatus: "APPROVED", stockReserved: false });
     const res = await ctx.api(a.token).patch(`/api/orders/${o._id}/status`).send({ status: "shipped" });
     expect(res.status).toBe(400);
   });
 
-  bug("S7c: a cancelled order cannot be moved back to processing/shipped/delivered", async () => {
+  it("S7c: a cancelled order cannot be moved back to processing/shipped/delivered", async () => {
     const a = await admin();
     const o = await insertOrder({ orderStatus: "cancelled", approvalStatus: "APPROVED", stockReserved: false });
     for (const s of ["processing", "shipped", "delivered"]) {
@@ -439,13 +439,13 @@ describe("S7 · admin changes to expired / cancelled / rejected orders", () => {
     }
   });
 
-  bug("S7d: a delivered order cannot go back to processing", async () => {
+  it("S7d: a delivered order cannot go back to processing", async () => {
     const a = await admin();
     const o = await insertOrder({ orderStatus: "delivered", approvalStatus: "APPROVED", deliveredAt: new Date() });
     expect((await ctx.api(a.token).patch(`/api/orders/${o._id}/status`).send({ status: "processing" })).status).toBe(400);
   });
 
-  bug("S7e: a REJECTED order cannot later be APPROVED", async () => {
+  it("S7e: a REJECTED order cannot later be APPROVED", async () => {
     await seedCatalog();
     const a = await admin();
     const c = await makeCustomer();
@@ -456,21 +456,22 @@ describe("S7 · admin changes to expired / cancelled / rejected orders", () => {
     expect(res.status).toBe(400);
   });
 
-  it("S7e (impact): reject → approve leaves an APPROVED order holding no stock, and the piece sells twice", async () => {
+  it("S7e: after reject → (refused) approve, the order stays REJECTED and the piece sells to the next customer only once", async () => {
     await seedCatalog();
     const a = await admin();
     const c1 = await makeCustomer();
     const c2 = await makeCustomer();
+    const c3 = await makeCustomer();
     const first = await ctx.api(c1.token).post("/api/orders").send({ items: [{ productId: "one-of-a-kind" }], paymentMethod: "cod" });
     const id = first.body.data._id;
     await ctx.api(a.token).patch(`/api/orders/${id}/approval`).send({ approvalStatus: "REJECTED", rejectionReason: "x" });
-    await ctx.api(a.token).patch(`/api/orders/${id}/approval`).send({ approvalStatus: "APPROVED" });
-    const second = await ctx.api(c2.token).post("/api/orders").send({ items: [{ productId: "one-of-a-kind" }], paymentMethod: "cod" });
-    expect((await Order.findById(id).lean()).approvalStatus).toBe("APPROVED");
-    expect(second.status).toBe(201); // one-of-a-kind piece, two live orders
+    expect((await ctx.api(a.token).patch(`/api/orders/${id}/approval`).send({ approvalStatus: "APPROVED" })).status).toBe(400);
+    expect((await Order.findById(id).lean()).approvalStatus).toBe("REJECTED");
+    expect((await ctx.api(c2.token).post("/api/orders").send({ items: [{ productId: "one-of-a-kind" }], paymentMethod: "cod" })).status).toBe(201);
+    expect((await ctx.api(c3.token).post("/api/orders").send({ items: [{ productId: "one-of-a-kind" }], paymentMethod: "cod" })).status).toBe(409);
   });
 
-  bug("S7f: admin setting status 'cancelled' returns the reserved stock", async () => {
+  it("S7f: admin setting status 'cancelled' returns the reserved stock", async () => {
     await seedCatalog();
     const a = await admin();
     const c = await makeCustomer();

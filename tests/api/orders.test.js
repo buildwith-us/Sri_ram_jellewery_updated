@@ -592,3 +592,34 @@ describe("reading orders", () => {
     expect((await ctx.api(admin.token).get("/api/orders/admin/all")).body).toEqual([]);
   });
 });
+
+describe("lifecycle table through the routes (S7)", () => {
+  it("admin cancelling an unpaid online order releases its stock", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const admin = await makeAdmin();
+    const created = await createPayment(c.token, [{ productId: "gold-ring" }]);
+    expect(await stockOf("gold-ring")).toBe(4);
+    const res = await ctx.api(admin.token).patch(`/api/orders/${created.body.orderId}/status`).send({ status: "cancelled" });
+    expect(res.status).toBe(200);
+    expect(await stockOf("gold-ring")).toBe(5);
+  });
+
+  it("a shipped order cannot be cancelled or moved back", async () => {
+    const admin = await makeAdmin();
+    const o = await insertOrder({ orderStatus: "shipped", approvalStatus: "APPROVED" });
+    for (const status of ["cancelled", "processing"]) {
+      expect((await ctx.api(admin.token).patch(`/api/orders/${o._id}/status`).send({ status })).status, status).toBe(400);
+    }
+  });
+
+  it("an admin cancel followed by a customer cancel restocks once", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const admin = await makeAdmin();
+    const placed = await placeOrder(c.token, [{ productId: "gold-ring", quantity: 2 }]);
+    await ctx.api(admin.token).patch(`/api/orders/${placed.body.data._id}/status`).send({ status: "cancelled" });
+    await ctx.api(c.token).patch(`/api/orders/${placed.body.data._id}/cancel`);
+    expect(await stockOf("gold-ring")).toBe(5);
+  });
+});

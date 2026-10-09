@@ -42,7 +42,12 @@ const AdminOrders = () => {
         refetch();
       }
     })
-    .catch((e) => console.error(e));
+    // The server refuses changes the order lifecycle does not allow (e.g. an
+    // expired order to shipped); show its reason and put the select back.
+    .catch((e) => {
+      toast.error(e.response?.data?.error || "Could not update the order status");
+      refetch();
+    });
   };
 
   // The 15-day delivery window is computed server-side from the approval time;
