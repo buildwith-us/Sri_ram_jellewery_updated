@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { useApp } from "../helpers/app.js";
-import { seedCatalog, createProduct, makeCustomer, makeAdmin, uniquePhone, customerViaOtp, SHIPPING } from "../helpers/factories.js";
+import { seedCatalog, createProduct, makeCustomer, makeAdmin, uniquePhone, customerViaOtp, insertOrder, SHIPPING } from "../helpers/factories.js";
 import { Cart } from "../../server/models/Cart.js";
 import { Wishlist } from "../../server/models/Wishlist.js";
 import { User } from "../../server/models/User.js";
@@ -277,6 +277,45 @@ describe("users — admin management", () => {
     const res = await ctx.api(admin.token).get("/api/users");
     expect(res.body).toHaveLength(2);
     for (const u of res.body) expect(u.passwordHash).toBeUndefined();
+  });
+
+  it("the admin list carries nothing sensitive — no OTP, password, token or hash field on any row", async () => {
+    const admin = await makeAdmin();
+    // A customer mid sign-in (a live code hash) and an admin (a password hash).
+    await makeCustomer({ otpHash: "$2b$12$abcdefghijklmnopqrstuv", otpExpiresAt: new Date(Date.now() + 60000) });
+    const res = await ctx.api(admin.token).get("/api/users");
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    const allowed = ["_id", "name", "email", "phone", "role", "photoURL", "createdAt", "orderCount", "totalSpent"];
+    for (const row of res.body) {
+      expect(Object.keys(row).filter((k) => !allowed.includes(k)), JSON.stringify(row)).toEqual([]);
+      expect(JSON.stringify(row)).not.toMatch(/otp|password|token|hash|\$2[aby]\$/i);
+    }
+  });
+
+  it("each row: name, email, phone, joined, orders placed and total spent by the revenue definition (B6)", async () => {
+    const admin = await makeAdmin();
+    const { user: c } = await makeCustomer({ name: "Asha Raman" });
+    const { user: quiet } = await makeCustomer({ name: "No Orders" });
+    const userId = String(c._id);
+    // Counted as placed AND spent: delivered COD, paid online.
+    await insertOrder({ userId, totalAmount: 1000, orderStatus: "delivered" });
+    await insertOrder({ userId, totalAmount: 2000, paymentMethod: "razorpay", paidAt: new Date(), paymentStatus: "paid" });
+    // Placed, not (yet) spent: COD on its way; a paid order later cancelled; a rejected COD.
+    await insertOrder({ userId, totalAmount: 400 });
+    await insertOrder({ userId, totalAmount: 800, paymentMethod: "razorpay", paidAt: new Date(), paymentStatus: "paid", orderStatus: "cancelled", refundRequired: true });
+    await insertOrder({ userId, totalAmount: 300, approvalStatus: "REJECTED" });
+    // Neither: an online checkout that was never paid.
+    await insertOrder({ userId, totalAmount: 5000, paymentMethod: "razorpay", paymentStatus: "expired", orderStatus: "expired" });
+
+    const rows = (await ctx.api(admin.token).get("/api/users")).body;
+    const row = rows.find((r) => r._id === userId);
+    expect(row).toMatchObject({ name: "Asha Raman", email: c.email, phone: c.phone, orderCount: 5, totalSpent: 3000 });
+    expect(new Date(row.createdAt).getTime()).toBe(new Date(c.createdAt).getTime());
+    expect(rows.find((r) => r._id === String(quiet._id))).toMatchObject({ orderCount: 0, totalSpent: 0 });
+    // The same total the revenue-wide figure uses.
+    const perCustomer = (await ctx.api(admin.token).get("/api/admin/total-spent")).body.find((r) => String(r.userId) === userId);
+    expect(perCustomer.totalSpent).toBe(row.totalSpent);
   });
 
   it("Make Admin: refused for a customer account (no password) — see S1", async () => {

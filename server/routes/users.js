@@ -1,6 +1,8 @@
 import express from "express";
 import bcrypt from "bcrypt";
 import { User } from "../models/User.js";
+import { Order } from "../models/Order.js";
+import { REVENUE_MATCH } from "../utils/revenue.js";
 import { verifyJWT, requireAdmin } from "../middleware/auth.js";
 import mongoose from "mongoose";
 import { validate, updateProfileSchema, changePasswordSchema, shippingAddressSchema, adminUpdateUserSchema, objectIdParam } from "../middleware/validate.js";
@@ -264,11 +266,60 @@ router.delete("/me/addresses/:id", verifyJWT, async (req, res) => {
 
 // ─── Admin User Management ──────────────────────────────────────────────────
 
-// GET /api/users — admin list all users
+/**
+ * The only fields of an account the admin list returns. An allowlist, not
+ * HIDDEN_USER_FIELDS: whatever is added to the User model later (another
+ * code, a token, a hash) stays out of this response until someone decides it
+ * belongs here.
+ */
+const ADMIN_LIST_FIELDS = "name email emailKey phone role photoURL createdAt";
+
+// An order the customer actually placed: cash on delivery, or paid online.
+// An online checkout that was never paid (pending, then expired) is an
+// attempt, not an order.
+const PLACED_ORDER_MATCH = {
+  $or: [
+    { paymentMethod: /^\s*cod\s*$/i },
+    { paymentMethod: { $exists: false } },
+    { paidAt: { $ne: null } },
+    { paymentStatus: "paid" },
+  ],
+};
+
+// GET /api/users — admin: every account, with what the owner needs to know
+// about each customer — name, email, phone, when they joined, how many orders
+// they have placed and how much they have spent. Spent is revenue by the one
+// definition in utils/revenue.js (B6), so it agrees with every other figure.
 router.get("/", verifyJWT, requireAdmin, async (req, res) => {
   try {
-    const users = await User.find().select(HIDDEN_USER_FIELDS).lean();
-    res.json(users);
+    const [users, placed, spent] = await Promise.all([
+      User.find().select(ADMIN_LIST_FIELDS).sort({ createdAt: -1 }).lean(),
+      Order.aggregate([
+        { $match: PLACED_ORDER_MATCH },
+        { $group: { _id: "$userId", orderCount: { $sum: 1 } } },
+      ]),
+      Order.aggregate([
+        { $match: REVENUE_MATCH },
+        { $group: { _id: "$userId", totalSpent: { $sum: "$totalAmount" } } },
+      ]),
+    ]);
+    const orderCount = new Map(placed.map((r) => [String(r._id), r.orderCount]));
+    const totalSpent = new Map(spent.map((r) => [String(r._id), r.totalSpent]));
+
+    res.json(
+      users.map((u) => ({
+        _id: u._id,
+        name: u.name || null,
+        // The sign-in address; emailKey when the typed form wasn't stored.
+        email: u.email || u.emailKey || null,
+        phone: u.phone || null,
+        role: u.role,
+        photoURL: u.photoURL || null,
+        createdAt: u.createdAt || null,
+        orderCount: orderCount.get(String(u._id)) || 0,
+        totalSpent: totalSpent.get(String(u._id)) || 0,
+      }))
+    );
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch users" });
   }
