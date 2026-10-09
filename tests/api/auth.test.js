@@ -271,6 +271,14 @@ describe("POST /api/auth/otp/verify (email)", () => {
     expect((await verifyOtp(user.email, lastCodeSentTo(user.email))).body.missing).toEqual(["phone"]);
   });
 
+  it("a phone stored before normalisation (or not a mobile) still counts as missing", async () => {
+    for (const phone of ["9876543210", "+91 98765 43210", "+914422334455", "   "]) {
+      const { user } = await makeCustomer({ phone });
+      await requestOtp(user.email);
+      expect((await verifyOtp(user.email, lastCodeSentTo(user.email))).body.missing, phone).toEqual(["phone"]);
+    }
+  });
+
   it("the access token works on a protected route, and /users/me reports profile status", async () => {
     const s = await customerViaOtp(api);
     const me = await api(s.token).get("/api/users/me");
