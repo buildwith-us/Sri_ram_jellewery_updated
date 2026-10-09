@@ -11,6 +11,7 @@ import {
 } from "../helpers/factories.js";
 import { Order } from "../../server/models/Order.js";
 import { Product } from "../../server/models/Product.js";
+import { Cart } from "../../server/models/Cart.js";
 import { releaseStaleReservations } from "../../server/utils/stock.js";
 
 const ctx = useApp();
@@ -310,5 +311,45 @@ describe("late payment after the sweeper expired the order", () => {
     await Order.updateOne({ _id: orderId }, { createdAt: new Date(Date.now() - 60 * 60 * 1000) });
     expect((await releaseStaleReservations()).released).toHaveLength(0);
     expect(await stockOf("gold-ring")).toBe(4);
+  });
+});
+
+// Decision 1: the UPI / QR SCAN tile pays through the SAME Razorpay path as
+// the card tile (Razorpay's own checkout offers UPI and QR). There is no
+// UPI-specific server code, so these are that path's guarantees as the UPI
+// tile relies on them.
+describe("UPI tile → the existing Razorpay flow", () => {
+  const bagAndCreate = async () => {
+    await seedCatalog();
+    const customer = await makeCustomer();
+    await ctx.api(customer.token).post("/api/cart").send({ productId: "gold-ring", name: "Gold Ring", quantity: 1 });
+    const created = await createPayment(customer.token, [{ productId: "gold-ring" }]);
+    expect(created.status).toBe(200);
+    return { customer, rzpId: created.body.razorpayOrderId, orderId: created.body.orderId };
+  };
+
+  it("a UPI payment that completes is saved paid, alerted once", async () => {
+    const { customer, rzpId, orderId } = await bagAndCreate();
+    const res = await verify(customer.token, rzpId, "pay_UPI1");
+    expect(res.status).toBe(200);
+    const o = await Order.findById(orderId).lean();
+    expect(o).toMatchObject({ paymentStatus: "paid", paymentMethod: "razorpay", orderStatus: "processing" });
+    expect(o.paidAt).toBeInstanceOf(Date);
+    expect(mocks().whatsapp.sendOrderAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("an abandoned UPI payment: no paid order, the bag is kept, the pending order expires and restocks", async () => {
+    const { customer, orderId } = await bagAndCreate();
+    expect(await stockOf("gold-ring")).toBe(4); // reserved while Razorpay is open
+    // The customer closes Razorpay: no /verify, no webhook.
+    expect(await Order.countDocuments({ paidAt: { $ne: null } })).toBe(0);
+    expect(await Cart.countDocuments({ userId: String(customer.user._id) })).toBe(1);
+    expect(mocks().whatsapp.sendOrderAlert).not.toHaveBeenCalled();
+    // 30 minutes later the sweeper gives the piece back.
+    await Order.updateOne({ _id: orderId }, { createdAt: new Date(Date.now() - 60 * 60 * 1000) });
+    expect((await releaseStaleReservations()).released).toHaveLength(1);
+    expect((await Order.findById(orderId).lean()).orderStatus).toBe("expired");
+    expect(await stockOf("gold-ring")).toBe(5);
+    expect(await Cart.countDocuments({ userId: String(customer.user._id) })).toBe(1);
   });
 });

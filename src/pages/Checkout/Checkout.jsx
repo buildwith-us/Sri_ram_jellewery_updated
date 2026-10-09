@@ -49,13 +49,37 @@ const Checkout = () => {
       ? Number(cartSubtotal.gstAmount)
       : null;
 
+  // Card and UPI are both paid through the existing Razorpay checkout.
+  const isOnlineMethod = paymentMethod === "card" || paymentMethod === "upi";
+
+  const onlinePaymentBox = (
+    <div className="mt-6 pt-6 border-t border-outline-variant/30 px-2" onClick={(e) => e.stopPropagation()}>
+      <PaymentContext.Provider
+        value={{
+          // The items and the total must come from the same source: Payment
+          // used to read the cart itself, so a "Buy Now" checkout billed the
+          // cart while showing the Buy Now total.
+          orderTotal: checkoutSubtotal,
+          checkoutItems: checkoutItems,
+          isBuyNow: !!buyNowItem,
+          setPaymentInfo: setPaymentInfo,
+        }}
+      >
+        <Payment />
+      </PaymentContext.Provider>
+    </div>
+  );
+
   const handlePlaceOrder = () => {
+    // An unpaid card/UPI checkout must never fall through to POST /api/orders,
+    // which places cash-on-delivery orders only.
+    if (isOnlineMethod && paymentInfo?.status !== "success") return;
     setIsPlacingOrder(true);
     
     // For card payments, the order is already created and verified in Payment.jsx.
     // If we reach here, it means they clicked Complete Order after Razorpay success,
     // or they are using COD/UPI.
-    if (paymentMethod === "card" && paymentInfo?.status === "success") {
+    if (isOnlineMethod && paymentInfo?.status === "success") {
       const goToConfirmation = () => {
         navigate("/order-success", {
           state: {
@@ -207,41 +231,30 @@ const Checkout = () => {
                     <span className="material-symbols-outlined text-on-surface-variant">credit_card</span>
                   </div>
                 </div>
-                {paymentMethod === 'card' && (
-                  <div className="mt-6 pt-6 border-t border-outline-variant/30 px-2" onClick={(e) => e.stopPropagation()}>
-                    <PaymentContext.Provider
-                      value={{
-                        // The items and the total must come from the same
-                        // source: Payment used to read the cart itself, so a
-                        // "Buy Now" checkout billed the cart while showing the
-                        // Buy Now total.
-                        orderTotal: checkoutSubtotal,
-                        checkoutItems: checkoutItems,
-                        isBuyNow: !!buyNowItem,
-                        setPaymentInfo: setPaymentInfo,
-                      }}
-                    >
-                      <Payment />
-                    </PaymentContext.Provider>
-                  </div>
-                )}
+                {paymentMethod === 'card' && onlinePaymentBox}
               </label>
 
               <label 
-                className={`flex items-center justify-between p-5 bg-white border cursor-pointer hover:border-primary transition-ui group ${paymentMethod === 'upi' ? 'border-primary' : 'border-outline-variant'}`}
+                className={`flex flex-col p-5 bg-white border cursor-pointer hover:border-primary transition-ui group ${paymentMethod === 'upi' ? 'border-primary' : 'border-outline-variant'}`}
                 onClick={() => setPaymentMethod('upi')}
               >
-                <div className="flex items-center gap-4">
-                  <input 
-                    checked={paymentMethod === 'upi'}
-                    readOnly
-                    className="text-primary focus:ring-primary w-5 h-5 border-outline-variant" 
-                    type="radio" 
-                    name="payment" 
-                  />
-                  <span className="font-label-caps text-on-surface">UPI / QR SCAN</span>
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-4">
+                    <input 
+                      checked={paymentMethod === 'upi'}
+                      readOnly
+                      className="text-primary focus:ring-primary w-5 h-5 border-outline-variant" 
+                      type="radio" 
+                      name="payment" 
+                    />
+                    <span className="font-label-caps text-on-surface">UPI / QR SCAN</span>
+                  </div>
+                  <span className="material-symbols-outlined text-on-surface-variant">qr_code_2</span>
                 </div>
-                <span className="material-symbols-outlined text-on-surface-variant">qr_code_2</span>
+                {/* Razorpay's checkout offers UPI and QR itself, so the UPI tile
+                    uses the very same payment box as the card tile — one
+                    payment path, never a second one. */}
+                {paymentMethod === 'upi' && onlinePaymentBox}
               </label>
 
               <label 
@@ -272,7 +285,9 @@ const Checkout = () => {
               className="w-full md:w-auto px-12 py-5 bg-primary-container text-on-primary-container font-button-text text-button-text uppercase tracking-widest hover:scale-[1.02] active:scale-95 transition-ui shadow-lg shadow-primary/10 text-center disabled:opacity-50 disabled:hover:scale-100 flex justify-center items-center gap-2"
               onClick={handlePlaceOrder}
               disabled={
-                (!paymentInfo && paymentMethod === "card") ||
+                // Card and UPI are paid through Razorpay first; Complete Order
+                // only confirms what has already been paid.
+                (isOnlineMethod && paymentInfo?.status !== "success") ||
                 !userFromDB?.shippingAddress ||
                 isPlacingOrder ||
                 !checkoutItems?.length

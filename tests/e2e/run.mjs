@@ -325,6 +325,48 @@ const addAddressViaUi = async (page) => {
   await page.getByText(/12 Temple Street/i).first().waitFor({ timeout: 10_000 });
 };
 
+/**
+ * Fake Razorpay for one page: serve a stand-in checkout.js and answer
+ * create-order / verify locally. window.__fakeRazorpayMode = "pay" | "dismiss".
+ * Also counts POST /api/orders and /api/payment/verify on the page.
+ */
+const installFakeRazorpay = async (page) => {
+  page.__ordersPosted = 0;
+  page.__verifyCalls = 0;
+  page.on("request", (r) => {
+    if (r.method() === "POST" && /\/api\/orders$/.test(new URL(r.url()).pathname)) page.__ordersPosted += 1;
+  });
+  await page.route("https://checkout.razorpay.com/v1/checkout.js", (route) =>
+    route.fulfill({
+      contentType: "application/javascript",
+      body: `window.Razorpay = function (options) {
+        this.on = function () {};
+        this.open = function () {
+          setTimeout(function () {
+            if (window.__fakeRazorpayMode === "pay") {
+              options.handler({ razorpay_order_id: options.order_id, razorpay_payment_id: "pay_e2e", razorpay_signature: "sig_e2e" });
+            } else if (options.modal && options.modal.ondismiss) {
+              options.modal.ondismiss();
+            }
+          }, 100);
+        };
+      };`,
+    })
+  );
+  await page.route("**/api/payment/create-order", async (route) => {
+    const body = route.request().postDataJSON();
+    const amount = (body.items || []).reduce((s, i) => s + (i.price || 0) * (i.quantity || 1), 0);
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ success: true, razorpayOrderId: "order_e2e", amount, currency: "INR", orderId: "0123456789abcdef01234567", key: "rzp_test_e2e" }),
+    });
+  });
+  await page.route("**/api/payment/verify", async (route) => {
+    page.__verifyCalls += 1;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ success: true, message: "Payment verified successfully" }) });
+  });
+};
+
 const runCustomerFlows = async (browser, viewport, seeded, shared) => {
   const context = await newContext(browser, viewport);
   const page = await context.newPage();
@@ -545,19 +587,43 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
     }],
   ]);
 
-  await flow(viewport, "UPI / QR SCAN cannot place an unpaid order (S2 fixed)", page, [
-    ["UPI tile → Complete Order is refused, nothing stored", async () => {
-      const before = (await api("GET", "/orders", { token })).body.length;
+  // Decision 1: the UPI tile uses the existing Razorpay flow. Real Razorpay
+  // cannot run here, so its script and the two payment calls are faked in
+  // the browser; the server side of that path is covered by the API tests.
+  await flow(viewport, "UPI / QR SCAN pays through Razorpay (Decision 1)", page, [
+    ["UPI tile shows the Razorpay box; Complete Order waits for payment", async () => {
+      await installFakeRazorpay(page);
       await goto(page, `/products/${p4._id}/description`);
-      await page.getByRole("button", { name: /buy now/i }).click();
-      await page.waitForURL(/\/checkout/);
+      // The bag still holds p4 from the Buy Now flow; make sure of it.
+      const cart = (await api("GET", "/cart", { token })).body;
+      if (!cart.some((c) => c.productId === p4.productId)) {
+        await page.getByRole("button", { name: /add to bag/i }).click();
+        await page.waitForTimeout(800);
+      }
+      await goto(page, "/checkout");
       await page.getByText("UPI / QR SCAN", { exact: true }).click();
-      await page.getByRole("button", { name: /complete order/i }).click();
-      await page.getByText(/only cash on delivery orders can be placed here/i).first().waitFor({ timeout: 10_000 });
-      expectTrue(/\/checkout/.test(page.url()), `navigated away to ${page.url()}`);
-      const orders = (await api("GET", "/orders", { token })).body;
-      expectTrue(orders.length === before && !orders.some((o) => o.paymentMethod === "upi"), "an unpaid UPI order was stored");
-      finding(viewport, "UPI / QR SCAN cannot place an unpaid order (S2 fixed)", "S2-UI", "The UPI tile now shows the server's refusal; wiring it to Razorpay is your pending decision.");
+      await page.getByRole("button", { name: /with razorpay/i }).waitFor({ timeout: 10_000 });
+      expectTrue(await page.getByRole("button", { name: /complete order/i }).isDisabled(), "Complete Order enabled before payment");
+    }],
+    ["Abandoned payment: nothing placed, bag kept", async () => {
+      await page.evaluate(() => (window.__fakeRazorpayMode = "dismiss"));
+      await page.getByRole("button", { name: /with razorpay/i }).click();
+      await page.waitForTimeout(800);
+      expectTrue(await page.getByRole("button", { name: /complete order/i }).isDisabled(), "Complete Order enabled after an abandoned payment");
+      expectTrue(page.__ordersPosted === 0, `POST /api/orders was called ${page.__ordersPosted} time(s)`);
+      const cart = (await api("GET", "/cart", { token })).body;
+      expectTrue(cart.some((c) => c.productId === p4.productId), "the bag lost its item");
+    }],
+    ["Completed payment: Complete Order → /order-success, never POST /api/orders", async () => {
+      await page.evaluate(() => (window.__fakeRazorpayMode = "pay"));
+      await page.getByRole("button", { name: /with razorpay/i }).click();
+      await page.getByText(/payment authorized/i).waitFor({ timeout: 10_000 });
+      const complete = page.getByRole("button", { name: /complete order/i });
+      expectTrue(await complete.isEnabled(), "Complete Order still disabled after payment");
+      await complete.click();
+      await page.waitForURL(/\/order-success/, { timeout: 15_000 });
+      expectTrue(page.__ordersPosted === 0, `POST /api/orders was called ${page.__ordersPosted} time(s)`);
+      expectTrue(page.__verifyCalls === 1, `/payment/verify called ${page.__verifyCalls} time(s)`);
     }],
   ]);
 
