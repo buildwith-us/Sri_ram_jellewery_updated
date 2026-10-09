@@ -1,4 +1,5 @@
 import React from 'react';
+import { isSameProduct } from "../../utils/productKey";
 import { useNavigate } from 'react-router-dom';
 import useAuthContext from '../../hooks/useAuthContext';
 import useCart from '../../hooks/useCart';
@@ -16,7 +17,7 @@ const ProductCard = ({ product }) => {
   const [axiosSecure] = useAxiosSecure();
   const { requireLogin } = useLoginGate();
   
-  const presentInWishlist = wishlistData?.some((item) => item.productId === product._id);
+  const presentInWishlist = wishlistData?.some((item) => isSameProduct(item.productId, product));
 
   const handleCardClick = () => {
     navigate(`/products/${product._id}/description`);
@@ -47,7 +48,7 @@ const ProductCard = ({ product }) => {
               return;
             }
             if (presentInWishlist) {
-              const wishlistItem = wishlistData.find(item => item.productId === product._id);
+              const wishlistItem = wishlistData.find((item) => isSameProduct(item.productId, product));
               axiosSecure.delete(`/wishlist/${wishlistItem._id}`).then(() => {
                 toast.success("Removed from wishlist");
                 refetchWishlist();

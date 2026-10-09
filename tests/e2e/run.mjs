@@ -562,9 +562,8 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
       await page.waitForTimeout(800);
       const card = page.locator("article", { hasText: p4.name }).first();
       const fill = await card.locator("button span").first().evaluate((el) => el.style.fontVariationSettings);
-      if (!/'FILL' 1/.test(fill)) {
-        finding(viewport, "Wishlist add / remove", "F1", `Card heart stays unfilled after adding (fontVariationSettings=${fill}): ProductCard compares wishlist productId ("${p4.productId}") with product._id`);
-      }
+      // F1 fixed: the saved line's productId now matches the card's product.
+      expectTrue(/["']FILL["'] 1/.test(fill), `card heart stays unfilled after adding (fontVariationSettings=${fill})`);
     }],
     ["Clicking the heart again removes it", async () => {
       const card = page.locator("article", { hasText: p4.name }).first();
@@ -572,11 +571,10 @@ const runCustomerFlows = async (browser, viewport, seeded, shared) => {
       await card.locator("button").first().click({ force: true });
       await page.waitForTimeout(1200);
       const wl = (await api("GET", "/wishlist", { token })).body;
-      if (wl.length !== 0) {
-        finding(viewport, "Wishlist add / remove", "F1", `Second heart click did not remove the item (wishlist still has ${wl.length}); it re-added instead`);
-      }
+      expectTrue(wl.length === 0, `second heart click did not remove the item (wishlist still has ${wl.length})`);
     }],
     ["Remove from the Wishlist page", async () => {
+      await api("POST", "/wishlist", { token, body: { productId: p4.productId, name: p4.name } });
       await goto(page, "/wishlist");
       await page.getByText(p4.name).first().waitFor({ timeout: 10_000 });
       await page.locator("main button").filter({ has: page.locator("span.material-symbols-outlined") }).first().click();

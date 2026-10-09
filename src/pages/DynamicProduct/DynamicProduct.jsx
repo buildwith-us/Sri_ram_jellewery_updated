@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { isSameProduct } from "../../utils/productKey";
 import { useQuery } from "react-query";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import useCart from "../../hooks/useCart";
@@ -66,10 +67,10 @@ const DynamicProduct = () => {
 
   useEffect(() => {
     if (user) {
-      const cartProduct = cartData?.find((cartItem) => cartItem.productId === id);
+      const cartProduct = cartData?.find((cartItem) => isSameProduct(cartItem.productId, dynamicProduct));
       setPresentInCart(!!cartProduct);
 
-      const wishlistProduct = wishlistData?.find((wishlistItem) => wishlistItem.productId === id);
+      const wishlistProduct = wishlistData?.find((wishlistItem) => isSameProduct(wishlistItem.productId, dynamicProduct));
       setPresentInWishlist(!!wishlistProduct);
     }
   }, [cartData, dynamicProduct, id, wishlistData, user]);
@@ -80,7 +81,7 @@ const DynamicProduct = () => {
         addToCart(dynamicProduct, quantity);
       } else if (where === "wishlist") {
         if (presentInWishlist) {
-          const wishlistItem = wishlistData.find(item => item.productId === id);
+          const wishlistItem = wishlistData.find((item) => isSameProduct(item.productId, dynamicProduct));
           if (wishlistItem) {
             axiosSecure.delete(`/wishlist/${wishlistItem._id}`).then(() => {
               import('react-hot-toast').then(({ default: toast }) => {
