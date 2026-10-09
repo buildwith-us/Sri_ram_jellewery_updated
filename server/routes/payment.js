@@ -9,6 +9,7 @@ import { sendOrderAlert, sendRefundRequiredAlert } from "../utils/whatsapp.js";
 import { getRateStatus, findUnpriceableMetalsForProducts, rateUnavailableMessage } from "../utils/getRates.js";
 import { reserveStock, releaseStock, outOfStockMessage } from "../utils/stock.js";
 import { validate, createPaymentOrderSchema } from "../middleware/validate.js";
+import { nextOrderId, isOrderIdClash, ORDER_ID_ATTEMPTS } from "../utils/orderId.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -145,11 +146,14 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
     let razorpayOrder;
     let order;
     try {
+      // Our order number first, so Razorpay's receipt carries the same one.
+      let orderId = await nextOrderId();
+
       // Create Razorpay order (amount in paise)
       razorpayOrder = await razorpay.orders.create({
         amount: totalAmount * 100, // Convert to paise
         currency: "INR",
-        receipt: `ORD-${Date.now()}`,
+        receipt: orderId,
         notes: {
           userId: req.user.userId,
           email: req.user.email,
@@ -160,9 +164,8 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
       // Profile phone, for the owner's delivery call (see Order.phone).
       const customer = await User.findById(req.user.userId).select("phone").lean();
 
-      order = await Order.create({
+      const fields = {
         phone: customer?.phone || undefined,
-        orderId: razorpayOrder.receipt,
         userId: req.user.userId,
         email: req.user.email,
         name: name || undefined,
@@ -175,7 +178,18 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
         orderStatus: "pending",
         paymentStatus: "pending",
         stockReserved: true,
-      });
+      };
+      // A clash with a number already stored takes the next one (the
+      // Razorpay receipt then names the first; razorpayOrderId links them).
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          order = await Order.create({ ...fields, orderId });
+          break;
+        } catch (saveError) {
+          if (!isOrderIdClash(saveError) || attempt >= ORDER_ID_ATTEMPTS) throw saveError;
+          orderId = await nextOrderId();
+        }
+      }
     } catch (createError) {
       // Razorpay refused, or the order write failed. Either way no order is
       // holding this stock, so it must go back rather than vanish.

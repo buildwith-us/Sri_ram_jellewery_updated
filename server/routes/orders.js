@@ -9,6 +9,7 @@ import { verifyJWT, requireAdmin } from "../middleware/auth.js";
 import { sendOrderAlert, sendOrderApprovalAlert, sendRefundRequiredAlert } from "../utils/whatsapp.js";
 import { reserveStock, releaseStock, outOfStockMessage } from "../utils/stock.js";
 import { checkStatusChange, checkApprove, checkReject } from "../utils/orderStatus.js";
+import { nextOrderId, isOrderIdClash, ORDER_ID_ATTEMPTS } from "../utils/orderId.js";
 import {
   validate,
   createOrderSchema,
@@ -186,7 +187,6 @@ router.post("/", verifyJWT, validate(createOrderSchema), async (req, res) => {
 
     const newOrder = new Order({
       phone: customer?.phone || undefined,
-      orderId: `ORD-${Date.now()}`,
       userId: req.user.userId,
       email: req.user.email,
       name: name || undefined,
@@ -202,13 +202,20 @@ router.post("/", verifyJWT, validate(createOrderSchema), async (req, res) => {
       stockReserved: true,
     });
 
-    try {
-      await newOrder.save();
-    } catch (saveError) {
-      // Stock is already out of the catalogue but no order holds it. Put it
-      // back rather than quietly losing inventory to a failed write.
-      await releaseStock(verifiedItems);
-      throw saveError;
+    // SRJ-YYYYMMDD-NNNN from an atomic daily counter. A clash with a number
+    // already stored (e.g. after the counter was reset) takes the next one.
+    for (let attempt = 1; ; attempt += 1) {
+      newOrder.orderId = await nextOrderId();
+      try {
+        await newOrder.save();
+        break;
+      } catch (saveError) {
+        if (isOrderIdClash(saveError) && attempt < ORDER_ID_ATTEMPTS) continue;
+        // Stock is already out of the catalogue but no order holds it. Put it
+        // back rather than quietly losing inventory to a failed write.
+        await releaseStock(verifiedItems);
+        throw saveError;
+      }
     }
 
     // Owner alert, fire-and-forget. Card orders are announced from the payment

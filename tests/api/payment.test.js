@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { useApp, mocks } from "../helpers/app.js";
 import {
   seedCatalog,
@@ -95,11 +95,12 @@ describe("POST /api/payment/create-order", () => {
 
   it("DB write failure after Razorpay → stock released", async () => {
     await seedCatalog();
-    // Duplicate receipt → unique orderId violation on Order.create.
-    await Order.create({ orderId: "ORD-DUP", totalAmount: 1, items: [] });
-    mocks().razorpayCreate.mockResolvedValueOnce({ id: "order_DUP", receipt: "ORD-DUP", amount: 1 });
+    // The order write fails after Razorpay accepted (it used to be forced via a
+    // duplicate receipt; order numbers no longer come from the receipt — S6).
+    const spy = vi.spyOn(Order, "create").mockRejectedValueOnce(new Error("write failed"));
     const c = await makeCustomer();
     const res = await createPayment(c.token, [{ productId: "gold-ring" }]);
+    spy.mockRestore();
     expect(res.status).toBe(500);
     expect(await stockOf("gold-ring")).toBe(5);
   });

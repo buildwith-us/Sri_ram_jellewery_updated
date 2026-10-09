@@ -14,6 +14,8 @@ import { useApp, mocks } from "../helpers/app.js";
 import { bug } from "../helpers/bug.js";
 import {
   seedCatalog,
+  seedRates,
+  createProduct,
   makeCustomer,
   makeAdmin,
   insertOrder,
@@ -405,39 +407,67 @@ describe("S5 · reviews", () => {
 
 // ─── S6 ──────────────────────────────────────────────────────────────────────
 
-describe("S6 · orderId is ORD-${Date.now()} with a unique index", () => {
-  /** Occupy every orderId the next few seconds could produce. */
+describe("S6 · order numbers: SRJ-YYYYMMDD-NNNN from a daily counter (fixed)", () => {
+  /** Occupy every ORD-<ms> id the next few seconds could produce (the old scheme). */
   const occupyNextMillis = async (ms = 4000, prefix = "ORD-") => {
     const start = Date.now();
     const docs = Array.from({ length: ms }, (_, i) => ({ orderId: `${prefix}${start + i}`, totalAmount: 1, items: [] }));
     await Order.collection.insertMany(docs);
   };
 
-  bug("S6a: a same-millisecond collision on POST /api/orders still places the order", async () => {
+  it("S6a: a same-millisecond collision on POST /api/orders still places the order", async () => {
     await seedCatalog();
     const c = await makeCustomer();
     await occupyNextMillis();
     const res = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring" }], paymentMethod: "cod" });
     expect(res.status).toBe(201);
+    expect(res.body.data.orderId).toMatch(/^SRJ-\d{8}-\d{4}$/);
   });
 
-  it("S6a (impact): the collision is a 500, and the reserved stock IS put back", async () => {
-    await seedCatalog();
-    const c = await makeCustomer();
-    await occupyNextMillis();
-    const res = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring", quantity: 2 }], paymentMethod: "cod" });
-    expect(res.status).toBe(500);
-    expect(await stockOf("gold-ring")).toBe(5);
+  it("S6a: 30 simultaneous orders all succeed, with 30 distinct consecutive numbers", async () => {
+    await seedRates();
+    await createProduct("gold", { stock: 100 });
+    const customers = await Promise.all(Array.from({ length: 30 }, () => makeCustomer()));
+    const results = await Promise.all(
+      customers.map((c) => ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring" }], paymentMethod: "cod" }))
+    );
+    expect(results.map((r) => r.status)).toEqual(Array(30).fill(201));
+    const ids = results.map((r) => r.body.data.orderId).sort();
+    expect(new Set(ids).size).toBe(30);
+    const seqs = ids.map((id) => Number(id.split("-")[2]));
+    expect(seqs).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
+    expect(await stockOf("gold-ring")).toBe(70);
   });
 
-  it("S6b (impact): on the card path the Razorpay order is created, then the DB write 500s", async () => {
+  it("S6a: a number already stored (e.g. counter reset) is skipped, not a 500", async () => {
     await seedCatalog();
     const c = await makeCustomer();
-    await occupyNextMillis();
-    const res = await ctx.api(c.token).post("/api/payment/create-order").send({ items: [{ productId: "gold-ring" }] });
-    expect(res.status).toBe(500);
-    expect(mocks().razorpayCreate).toHaveBeenCalledTimes(1); // orphaned Razorpay order
-    expect(await stockOf("gold-ring")).toBe(5);
+    const { nextOrderId } = await import("../../server/utils/orderId.js");
+    const { Counter } = await import("../../server/models/Counter.js");
+    const taken = await nextOrderId(); // …-0001
+    await Order.collection.insertOne({ orderId: taken, totalAmount: 1, items: [] });
+    await Counter.deleteMany({}); // the counter forgets it handed that out
+    const res = await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring" }], paymentMethod: "cod" });
+    expect(res.status).toBe(201);
+    expect(res.body.data.orderId).toBe(taken.replace(/-0001$/, "-0002"));
+  });
+
+  it("S6b: the card path gets the same format, and Razorpay's receipt carries it", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const res = await ctx.api(c.token).post("/api/payment/create-order").send({ items: [{ productId: "gold-ring" }], shippingAddress: SHIPPING });
+    expect(res.status).toBe(200);
+    const o = await Order.findById(res.body.orderId).lean();
+    expect(o.orderId).toMatch(/^SRJ-\d{8}-\d{4}$/);
+    expect(mocks().razorpayCreate.mock.calls[0][0].receipt).toBe(o.orderId);
+  });
+
+  it("S6: existing ORD-… numbers are left exactly as they are", async () => {
+    await Order.collection.insertOne({ orderId: "ORD-1760023847193", totalAmount: 1, items: [] });
+    await seedCatalog();
+    const c = await makeCustomer();
+    await ctx.api(c.token).post("/api/orders").send({ items: [{ productId: "gold-ring" }], paymentMethod: "cod" });
+    expect(await Order.countDocuments({ orderId: "ORD-1760023847193" })).toBe(1);
   });
 });
 
