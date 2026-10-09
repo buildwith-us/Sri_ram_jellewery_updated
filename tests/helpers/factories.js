@@ -196,12 +196,21 @@ export const lastCodeSentTo = (to) => {
 };
 
 /** A customer signed in through the real email-code endpoints. */
-export const customerViaOtp = async (api, email = uniqueEmail()) => {
+/**
+ * A customer created the way the site creates one: code requested, then
+ * verified together with name and phone (an account is only created then).
+ * For an address that already has an account, the details are ignored.
+ */
+export const customerViaOtp = async (
+  api,
+  email = uniqueEmail(),
+  details = { name: "OTP Customer", phone: uniquePhone() }
+) => {
   const r1 = await api().post("/api/auth/otp/request").send({ email });
   if (r1.status !== 200) throw new Error(`otp/request ${r1.status}: ${JSON.stringify(r1.body)}`);
   const otp = lastCodeSentTo(email);
   if (!otp) throw new Error(`no sign-in code was emailed to ${email}`);
-  const r2 = await api().post("/api/auth/otp/verify").send({ email, otp });
+  const r2 = await api().post("/api/auth/otp/verify").send({ email, otp, ...details });
   if (r2.status !== 200) throw new Error(`otp/verify ${r2.status}: ${JSON.stringify(r2.body)}`);
   return { email, ...r2.body, token: r2.body.accessToken };
 };

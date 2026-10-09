@@ -193,8 +193,9 @@ describe("users — self service", () => {
     expect((await ctx.api(b.token).patch("/api/users/me").send({ phone: `0${national}` })).status).toBe(409);
   });
 
-  it("registration: a new email-code customer adds name + phone and the profile becomes complete", async () => {
-    const s = await customerViaOtp(ctx.api);
+  it("an account without name + phone (created before both were required) completes it through PATCH /me", async () => {
+    const { user } = await makeCustomer({ name: undefined, phone: undefined });
+    const s = await customerViaOtp(ctx.api, user.email);
     expect(s.profileComplete).toBe(false);
     const phone = uniquePhone();
     const res = await ctx.api(s.token).patch("/api/users/me").send({ name: "  Asha Raman  ", phone: `+91 ${phone}` });

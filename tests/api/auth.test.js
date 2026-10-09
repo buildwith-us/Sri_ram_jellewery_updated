@@ -14,6 +14,7 @@ import {
   tokenFor,
 } from "../helpers/factories.js";
 import { User } from "../../server/models/User.js";
+import { PendingSignup } from "../../server/models/PendingSignup.js";
 import { RefreshToken } from "../../server/models/RefreshToken.js";
 import { PasswordResetToken } from "../../server/models/PasswordResetToken.js";
 
@@ -36,20 +37,21 @@ afterEach(() => {
 });
 
 const requestOtp = (email) => api().post("/api/auth/otp/request").send({ email });
-const verifyOtp = (email, otp) => api().post("/api/auth/otp/verify").send({ email, otp });
+const verifyOtp = (email, otp, details = {}) => api().post("/api/auth/otp/verify").send({ email, otp, ...details });
+const DETAILS = () => ({ name: "Asha Raman", phone: uniquePhone() });
 const sentCount = () => mocks().resendSend.mock.calls.length;
 const decode = (token) => jwt.decode(token);
 
 describe("POST /api/auth/otp/request (email)", () => {
-  it("creates a USER keyed by the normalised address, stores the address as typed, emails a 5-minute code", async () => {
+  it("a new address creates NO account: the code waits as a pending sign-up, keyed by the normalised address; a 5-minute code is emailed", async () => {
     const typed = `  Asha.${process.pid}@Example.COM `;
     const key = typed.trim().toLowerCase();
     const res = await requestOtp(typed);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, message: "OTP sent successfully" });
 
-    const u = await User.findOne({ emailKey: key }).lean();
-    expect(u.role).toBe("USER");
+    expect(await User.countDocuments()).toBe(0);
+    const u = await PendingSignup.findOne({ emailKey: key }).lean();
     expect(u.email).toBe(typed.trim());
     expect(u.otpHash).toMatch(/^\$2[aby]\$/);
     const ttl = u.otpExpiresAt.getTime() - Date.now();
@@ -73,13 +75,15 @@ describe("POST /api/auth/otp/request (email)", () => {
       `a.s.h.a.raman${process.pid}+x@googlemail.com`,
     ];
     for (const s of spellings) expect((await requestOtp(s)).status).toBe(200);
-    const accounts = await User.find({ emailKey: { $exists: true } }).lean();
-    expect(accounts).toHaveLength(1);
-    expect(accounts[0].emailKey).toBe(`asharaman${process.pid}@gmail.com`);
+    const pending = await PendingSignup.find().lean();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].emailKey).toBe(`asharaman${process.pid}@gmail.com`);
     // The latest code, requested under one spelling, verifies under another.
     const otp = lastCodeSentTo(spellings[2].trim());
-    const res = await verifyOtp(`ASHA.RAMAN.${process.pid}@gmail.com`, otp);
+    const res = await verifyOtp(`ASHA.RAMAN.${process.pid}@gmail.com`, otp, DETAILS());
     expect(res.status).toBe(200);
+    const accounts = await User.find({ emailKey: { $exists: true } }).lean();
+    expect(accounts).toHaveLength(1);
     expect(res.body.user._id).toBe(String(accounts[0]._id));
   });
 
@@ -87,7 +91,7 @@ describe("POST /api/auth/otp/request (email)", () => {
     await requestOtp("a.b@shop.in");
     await requestOtp("ab@shop.in");
     await requestOtp("ab+x@shop.in");
-    expect(await User.countDocuments({ emailKey: { $exists: true } })).toBe(3);
+    expect(await PendingSignup.countDocuments()).toBe(3);
   });
 
   it.each([["not-an-email"], ["a@b"], [""], ["   "], [undefined], [12345], ["x".repeat(250) + "@a.com"]])(
@@ -160,7 +164,8 @@ describe("POST /api/auth/otp/request (email)", () => {
     const res = await requestOtp(email);
     expect(res.status).toBe(503);
     expect(res.body.success).toBeUndefined();
-    expect((await User.findOne({ emailKey: email }).lean()).otpHash).toBeUndefined();
+    expect(await PendingSignup.countDocuments({ emailKey: email })).toBe(0);
+    expect(await User.countDocuments()).toBe(0);
     expect(spy.mock.calls.flat().join(" ")).toMatch(/EMAIL SEND FAILED/);
   });
 
@@ -241,17 +246,30 @@ describe("test OTP (ALLOW_TEST_OTP + TEST_OTP_EMAILS)", () => {
 });
 
 describe("POST /api/auth/otp/verify (email)", () => {
-  it("new address: tokens, USER role, code cleared, profile incomplete (name and phone missing)", async () => {
+  it("new address, right code, no details: needsDetails, no session, no account, and the code still works", async () => {
     const email = uniqueEmail();
     await requestOtp(email);
-    const res = await verifyOtp(email.toUpperCase(), lastCodeSentTo(email));
+    const code = lastCodeSentTo(email);
+    const res = await verifyOtp(email, code);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, needsDetails: true, profileComplete: false, missing: ["name", "phone"] });
+    expect(await User.countDocuments()).toBe(0);
+    expect((await verifyOtp(email, code, DETAILS())).status).toBe(200);
+  });
+
+  it("new address with name + phone: the account is created then, complete, with a session", async () => {
+    const email = uniqueEmail();
+    await requestOtp(email);
+    const phone = uniquePhone();
+    const res = await verifyOtp(email.toUpperCase(), lastCodeSentTo(email), { name: "  Asha Raman ", phone: `0${phone}` });
     expect(res.status).toBe(200);
     expect(res.body.refreshToken).toMatch(/^[0-9a-f]{80}$/);
-    expect(res.body.user).toMatchObject({ email, role: "USER" });
-    expect(res.body.profileComplete).toBe(false);
-    expect(res.body.missing).toEqual(["name", "phone"]);
+    expect(res.body.user).toMatchObject({ email, role: "USER", name: "Asha Raman", phone: `+91${phone}` });
+    expect(res.body).toMatchObject({ isNewAccount: true, profileComplete: true, missing: [] });
     const u = await User.findOne({ emailKey: email }).lean();
+    expect(u).toMatchObject({ name: "Asha Raman", phone: `+91${phone}`, role: "USER" });
     expect(u.otpHash).toBeUndefined();
+    expect(await PendingSignup.countDocuments()).toBe(0);
     const stored = await RefreshToken.findOne({ userId: u._id }).lean();
     expect(stored.tokenHash).toBe(crypto.createHash("sha256").update(res.body.refreshToken).digest("hex"));
     expect(decode(res.body.accessToken)).toMatchObject({ role: "USER", email });
@@ -283,7 +301,63 @@ describe("POST /api/auth/otp/verify (email)", () => {
     const s = await customerViaOtp(api);
     const me = await api(s.token).get("/api/users/me");
     expect(me.status).toBe(200);
-    expect(me.body.data).toMatchObject({ profileComplete: false, missing: ["name", "phone"] });
+    expect(me.body.data).toMatchObject({ name: "OTP Customer", profileComplete: true, missing: [] });
+  });
+
+  it.each([
+    [{ name: "", phone: "9876543210" }, /name is required/i],
+    [{ name: "   ", phone: "9876543210" }, /name is required/i],
+    [{ name: "x".repeat(101), phone: "9876543210" }, /under 100/i],
+    [{ name: "Asha" }, /required/i],
+    [{ name: "Asha", phone: "12345" }, /./],
+    [{ name: "Asha", phone: "+914422334455" }, /./],
+  ])("new address, bad details %j → 400, no account, the code still works", async (details, message) => {
+    const email = uniqueEmail();
+    await requestOtp(email);
+    const code = lastCodeSentTo(email);
+    const res = await verifyOtp(email, code, details);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(message);
+    expect(await User.countDocuments()).toBe(0);
+    expect((await verifyOtp(email, code, DETAILS())).status).toBe(200);
+  });
+
+  it("a phone already on an account is reported only after a right code — 409, no account, code still works", async () => {
+    const { user: other } = await makeCustomer();
+    const email = uniqueEmail();
+    await requestOtp(email);
+    const code = lastCodeSentTo(email);
+    const wrong = code === "000000" ? "111111" : "000000";
+    // Wrong code: the answer says nothing about the number.
+    const guess = await verifyOtp(email, wrong, { name: "Stranger", phone: other.phone });
+    expect(guess.status).toBe(401);
+    expect(guess.body.error).toBe("Invalid OTP");
+    // Right code, any spelling of the taken number.
+    const taken = await verifyOtp(email, code, { name: "Asha", phone: other.phone.replace("+91", "") });
+    expect(taken.status).toBe(409);
+    expect(taken.body.error).toBe("That mobile number is already linked to another account");
+    expect(taken.body.accessToken).toBeUndefined();
+    expect(await User.countDocuments({ emailKey: email })).toBe(0);
+    expect((await verifyOtp(email, code, DETAILS())).status).toBe(200);
+  });
+
+  it("an abandoned sign-up leaves no customer record behind", async () => {
+    await requestOtp(uniqueEmail());
+    await requestOtp(uniqueEmail());
+    expect(await User.countDocuments()).toBe(0);
+    // And the pending codes expire by themselves (TTL index on otpExpiresAt).
+    const ttl = (await PendingSignup.collection.indexes()).find((i) => i.key.otpExpiresAt);
+    expect(ttl.expireAfterSeconds).toBe(0);
+  });
+
+  it("an existing account: details sent with the code are ignored, nothing is overwritten", async () => {
+    const { user } = await makeCustomer({ name: "Original", phone: undefined });
+    await requestOtp(user.email);
+    const res = await verifyOtp(user.email, lastCodeSentTo(user.email), { name: "Changed", phone: uniquePhone() });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ isNewAccount: false, profileComplete: false, missing: ["phone"] });
+    expect(await User.findById(user._id).lean()).toMatchObject({ name: "Original" });
+    expect((await User.findById(user._id).lean()).phone).toBeUndefined();
   });
 
   it("wrong code → 401", async () => {
@@ -295,21 +369,33 @@ describe("POST /api/auth/otp/verify (email)", () => {
     expect(res.body.error).toBe("Invalid OTP");
   });
 
-  it("expired code → 401", async () => {
+  it("expired code → 401 (new address and existing account)", async () => {
     const email = uniqueEmail();
     await requestOtp(email);
-    await User.updateOne({ emailKey: email }, { otpExpiresAt: new Date(Date.now() - 1000) });
-    const res = await verifyOtp(email, lastCodeSentTo(email));
+    await PendingSignup.updateOne({ emailKey: email }, { otpExpiresAt: new Date(Date.now() - 1000) });
+    const res = await verifyOtp(email, lastCodeSentTo(email), DETAILS());
     expect(res.status).toBe(401);
     expect(res.body.error).toBe("OTP has expired");
+    expect(await User.countDocuments()).toBe(0);
+
+    const { user } = await makeCustomer();
+    await requestOtp(user.email);
+    await User.updateOne({ _id: user._id }, { otpExpiresAt: new Date(Date.now() - 1000) });
+    expect((await verifyOtp(user.email, lastCodeSentTo(user.email))).body.error).toBe("OTP has expired");
   });
 
-  it("a code is single use", async () => {
+  it("a code is single use (new address and existing account)", async () => {
     const email = uniqueEmail();
     await requestOtp(email);
     const code = lastCodeSentTo(email);
-    expect((await verifyOtp(email, code)).status).toBe(200);
-    expect((await verifyOtp(email, code)).status).toBe(401);
+    expect((await verifyOtp(email, code, DETAILS())).status).toBe(200);
+    expect((await verifyOtp(email, code, DETAILS())).status).toBe(401);
+
+    const { user } = await makeCustomer();
+    await requestOtp(user.email);
+    const again = lastCodeSentTo(user.email);
+    expect((await verifyOtp(user.email, again)).status).toBe(200);
+    expect((await verifyOtp(user.email, again)).status).toBe(401);
   });
 
   it("a new request replaces the previous code", async () => {
@@ -351,7 +437,8 @@ describe("an email code can NEVER mint an ADMIN token", () => {
   });
 
   it("a customer record switched to ADMIN between request and verify is refused", async () => {
-    const email = uniqueEmail();
+    const { user } = await makeCustomer();
+    const email = user.email;
     await requestOtp(email);
     await User.updateOne({ emailKey: email }, { role: "ADMIN" });
     const res = await verifyOtp(email, lastCodeSentTo(email));

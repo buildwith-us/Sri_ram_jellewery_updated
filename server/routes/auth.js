@@ -10,6 +10,8 @@ import { verifyJWT, JWT_SECRET } from "../middleware/auth.js";
 import { otpLimiter, otpVerifyLimiter, otpRecipientLimiter, authLimiter } from "../middleware/rateLimit.js";
 import { normalizeEmail, canonicalEmailKey } from "../utils/emailIdentity.js";
 import { profileStatus } from "../utils/profile.js";
+import { PendingSignup } from "../models/PendingSignup.js";
+import { normalizeIndianPhone } from "../utils/phone.js";
 // These schemas already existed in middleware/validate.js but were wired to
 // nothing — every auth route hand-rolled its own checks.
 import { validate, registerSchema } from "../middleware/validate.js";
@@ -203,29 +205,33 @@ router.post("/otp/request", otpLimiter, otpRecipientLimiter, async (req, res) =>
     }
 
     const otp = testOtp ? TEST_OTP : crypto.randomInt(100000, 1000000).toString();
-
-    if (!user) {
-      user = new User({ emailKey, role: "USER" });
-      // The display address is stored only when no other record holds that
-      // exact string (a legacy customer may have typed it as an unverified
-      // contact address). The account is keyed by emailKey either way.
-      if (!(await User.exists({ email: display }))) user.email = display;
-    }
     const otpHash = await bcrypt.hash(otp, BCRYPT_SALT_ROUNDS);
     const otpExpiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
-    user.otpHash = otpHash;
-    user.otpExpiresAt = otpExpiresAt;
-    try {
-      await user.save();
-    } catch (saveError) {
-      // Two first requests for the same new address raced and the unique
-      // emailKey index let only one create the account. Use the winner's.
-      if (saveError?.code !== 11000) throw saveError;
-      user = await User.findOne({ emailKey });
-      if (!user || user.role !== "USER") return res.json(OTP_SENT);
+
+    // A customer's code is kept on their account. An address with no account
+    // gets NO account yet — only a pending code that expires by itself. The
+    // account is created when the code is verified (see /otp/verify), so an
+    // abandoned or mistyped sign-up leaves no customer record behind.
+    let clearCode;
+    if (user) {
       user.otpHash = otpHash;
       user.otpExpiresAt = otpExpiresAt;
       await user.save();
+      clearCode = async () => {
+        user.otpHash = undefined;
+        user.otpExpiresAt = undefined;
+        await user.save();
+      };
+    } else {
+      const pending = { $set: { email: display, otpHash, otpExpiresAt } };
+      try {
+        await PendingSignup.updateOne({ emailKey }, pending, { upsert: true });
+      } catch (saveError) {
+        // Two first requests for one address raced to insert; update the winner.
+        if (saveError?.code !== 11000) throw saveError;
+        await PendingSignup.updateOne({ emailKey }, pending);
+      }
+      clearCode = () => PendingSignup.deleteOne({ emailKey });
     }
 
     if (testOtp) {
@@ -244,9 +250,7 @@ router.post("/otp/request", otpLimiter, otpRecipientLimiter, async (req, res) =>
       // Never report success for a code that did not leave. The provider's
       // reason is already logged loudly by sendMail. The stored code is
       // cleared so it cannot outlive a delivery that never happened.
-      user.otpHash = undefined;
-      user.otpExpiresAt = undefined;
-      await user.save();
+      await clearCode();
       return res.status(503).json({
         error: "We couldn't send your sign-in code just now. Please try again in a few minutes.",
       });
@@ -259,7 +263,90 @@ router.post("/otp/request", otpLimiter, otpRecipientLimiter, async (req, res) =>
   }
 });
 
+const PHONE_TAKEN = "That mobile number is already linked to another account";
+
+/** The session and profile summary every successful code verification returns. */
+const signedInResponse = async (user, { isNewAccount }) => {
+  // Hard-coded: an email code can only ever produce a customer session.
+  const accessToken = generateAccessToken(user, { role: "USER" });
+  const refreshToken = await generateRefreshToken(user._id, "USER");
+  return {
+    success: true,
+    accessToken,
+    refreshToken,
+    user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email || user.emailKey,
+      phone: user.phone,
+      role: "USER",
+    },
+    isNewAccount,
+    ...profileStatus(user),
+  };
+};
+
+/**
+ * A code for an address with no account (a PendingSignup). The account is
+ * created here, only once the code is right, and only with what a customer
+ * needs: a name and an Indian mobile number, normalised and not on another
+ * account. Nothing is written before that.
+ *
+ * Without name and phone (the "Sign in" path, typed by someone with no
+ * account) a correct code answers `needsDetails` and stays valid, so the
+ * customer gives them and sends the same code again. A phone that is taken is
+ * reported only here, after the code: before it the person is unverified, and
+ * telling them would reveal to anyone which numbers are registered.
+ */
+const verifyNewAccount = async (req, res, { emailKey, otp, invalid }) => {
+  const pending = await PendingSignup.findOne({ emailKey });
+  if (!pending) return invalid();
+
+  if (Date.now() > pending.otpExpiresAt.getTime()) {
+    return res.status(401).json({ error: "OTP has expired" });
+  }
+  if (!(await bcrypt.compare(String(otp), pending.otpHash))) {
+    return res.status(401).json({ error: "Invalid OTP" });
+  }
+
+  const { name, phone } = req.body;
+  if (name === undefined && phone === undefined) {
+    return res.json({ success: true, needsDetails: true, profileComplete: false, missing: ["name", "phone"] });
+  }
+
+  const cleanName = String(name ?? "").trim();
+  if (!cleanName) return res.status(400).json({ error: "Name is required" });
+  if (cleanName.length > 100) return res.status(400).json({ error: "Name must be under 100 characters" });
+
+  const normalized = normalizeIndianPhone(phone);
+  if (!normalized.ok) return res.status(400).json({ error: normalized.reason });
+  if (await User.exists({ phone: normalized.phone })) return res.status(409).json({ error: PHONE_TAKEN });
+
+  const user = new User({ emailKey, role: "USER", name: cleanName, phone: normalized.phone });
+  // The display address is stored only when no other record holds that exact
+  // string (a legacy customer may have typed it as an unverified contact
+  // address). The account is keyed by emailKey either way.
+  if (pending.email && !(await User.exists({ email: pending.email }))) user.email = pending.email;
+  try {
+    await user.save();
+  } catch (saveError) {
+    if (saveError?.code !== 11000) throw saveError;
+    // The checks above are a courtesy; the unique indexes are the guarantee.
+    const field = Object.keys(saveError.keyPattern || {})[0];
+    if (field === "phone") return res.status(409).json({ error: PHONE_TAKEN });
+    // A second verification for the same address created the account first.
+    return res.status(409).json({ error: "This account was just created. Please sign in." });
+  }
+
+  // Single use: the pending code goes once the account exists.
+  await PendingSignup.deleteOne({ _id: pending._id });
+  res.json(await signedInResponse(user, { isNewAccount: true }));
+};
+
 // ─── POST /api/auth/otp/verify ───────────────────────────────────────────────
+//
+// An existing customer: email + code. An address with no account: email +
+// code + name + phone, creating the account (verifyNewAccount).
 router.post("/otp/verify", otpVerifyLimiter, async (req, res) => {
   try {
     const { otp } = req.body || {};
@@ -274,7 +361,12 @@ router.post("/otp/verify", otpVerifyLimiter, async (req, res) => {
     const invalid = () => res.status(401).json({ error: "Invalid OTP or email address" });
 
     const user = await User.findOne({ emailKey });
-    if (!user || !user.otpHash || !user.otpExpiresAt) return invalid();
+    if (!user) {
+      // Never for an administrator's address: /otp/request stores nothing for one.
+      if (await isAdminAddress(emailKey)) return invalid();
+      return verifyNewAccount(req, res, { emailKey, otp, invalid });
+    }
+    if (!user.otpHash || !user.otpExpiresAt) return invalid();
 
     // Only customer records may be signed in with a code — never an
     // administrator, whether by role on the record or by address.
@@ -297,23 +389,10 @@ router.post("/otp/verify", otpVerifyLimiter, async (req, res) => {
     user.otpExpiresAt = undefined;
     await user.save();
 
-    // Hard-coded: an email code can only ever produce a customer session.
-    const accessToken = generateAccessToken(user, { role: "USER" });
-    const refreshToken = await generateRefreshToken(user._id, "USER");
-
-    res.json({
-      success: true,
-      accessToken,
-      refreshToken,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email || user.emailKey,
-        phone: user.phone,
-        role: "USER",
-      },
-      ...profileStatus(user),
-    });
+    // An existing account signs in as it is; name and phone sent with the
+    // code (the "Create account" path) are not written here — an incomplete
+    // profile is completed through PATCH /api/users/me.
+    res.json(await signedInResponse(user, { isNewAccount: false }));
   } catch (error) {
     console.error("OTP Verify error:", error);
     res.status(500).json({ error: "Failed to verify OTP" });
