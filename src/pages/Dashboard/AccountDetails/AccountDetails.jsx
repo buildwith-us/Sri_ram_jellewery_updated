@@ -9,8 +9,8 @@ const AccountDetails = () => {
   const [showPasswordFields, setShowPasswordFields] = useState(false);
 
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [emailError, setEmailError] = useState(null);
+  const [phone, setPhone] = useState('');
+  const [phoneError, setPhoneError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState('');
@@ -20,27 +20,22 @@ const AccountDetails = () => {
 
   React.useEffect(() => {
     if (userFromDB?.name) setName(userFromDB.name);
-    // Seed from whatever is stored, including nothing — a customer who signed
-    // up before this field existed sees an empty box they can fill in.
-    setEmail(userFromDB?.email || '');
+    setPhone(userFromDB?.phone || '');
   }, [userFromDB]);
 
   const handleSaveDetails = (e) => {
     e.preventDefault();
-
-    const trimmed = email.trim();
-    if (trimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
-      setEmailError('Enter a valid email address');
-      return;
-    }
-    setEmailError(null);
-
+    setPhoneError(null);
     setIsSaving(true);
-    // Always send `email`, unlike signup: here an empty string is meaningful.
-    // It is how someone removes an address they previously saved, which the
-    // server turns into an $unset rather than storing a blank value.
+
+    // Email is never sent: it is the verified sign-in address and the server
+    // refuses changes to it. Phone is sent only when it changed, and the
+    // server validates, normalises and de-duplicates it.
+    const payload = { name };
+    if (phone.trim() !== (userFromDB?.phone || '')) payload.phone = phone.trim();
+
     axiosSecure
-      .patch('/users/me', { name, email: trimmed })
+      .patch('/users/me', payload)
       .then((res) => {
         if (res.data.success) {
           toast.success('Account details saved');
@@ -49,9 +44,7 @@ const AccountDetails = () => {
       })
       .catch((error) => {
         const message = error.response?.data?.error || 'Failed to save changes';
-        // A collision is about the email specifically — show it against the
-        // field rather than only as a toast that disappears.
-        if (error.response?.status === 409) setEmailError(message);
+        if ('phone' in payload) setPhoneError(message);
         toast.error(message);
       })
       .finally(() => setIsSaving(false));
@@ -107,61 +100,48 @@ const AccountDetails = () => {
             </label>
             <input
               id="account-phone"
-              className="border-0 border-b border-outline-variant bg-transparent w-full py-3 transition-colors outline-none focus:ring-0 focus:border-primary font-body-base text-on-surface"
-              placeholder="Your contact number"
+              className={`border-0 border-b bg-transparent w-full py-3 transition-colors outline-none focus:ring-0 font-body-base text-on-surface ${
+                phoneError ? 'border-error focus:border-error' : 'border-outline-variant focus:border-primary'
+              }`}
+              placeholder="98765 43210"
               type="tel"
-              defaultValue={userFromDB?.phone || ''}
-              disabled
+              autoComplete="tel"
+              required
+              value={phone}
+              onChange={(e) => {
+                setPhone(e.target.value);
+                if (phoneError) setPhoneError(null);
+              }}
+              aria-invalid={Boolean(phoneError)}
+              aria-describedby="account-phone-help"
             />
-            <p className="text-[12px] text-on-surface-variant/70 pt-1">
-              This is how you sign in, so it can't be changed here.
+            <p id="account-phone-help" className="text-[12px] pt-1">
+              {phoneError ? (
+                <span className="text-error font-semibold">{phoneError}</span>
+              ) : (
+                <span className="text-on-surface-variant/70">We call this number about your deliveries.</span>
+              )}
             </p>
           </div>
         </div>
 
-        {/* Email — optional contact detail, not a sign-in method */}
+        {/* Email — the verified sign-in address, read-only here */}
         <div className="space-y-1">
           <label className="font-label-caps text-label-caps text-outline uppercase block" htmlFor="account-email">
-            Email <span className="normal-case text-on-surface-variant/60">(optional)</span>
+            Email Address
           </label>
           <input
             id="account-email"
-            className={`border-0 border-b bg-transparent w-full py-3 transition-colors outline-none focus:ring-0 font-body-base text-on-surface ${
-              emailError ? 'border-error focus:border-error' : 'border-outline-variant focus:border-primary'
-            }`}
-            placeholder="you@example.com"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              if (emailError) setEmailError(null);
-            }}
-            aria-invalid={Boolean(emailError)}
-            aria-describedby="account-email-help"
-          />
-          <p id="account-email-help" className="text-[12px] pt-1">
-            {emailError ? (
-              <span className="text-error font-semibold">{emailError}</span>
-            ) : (
-              <span className="text-on-surface-variant/70">
-                For order updates. You'll still sign in with your phone number.
-                Leave blank to remove it.
-              </span>
-            )}
-          </p>
-        </div>
-
-        {/* Form Group: Communication */}
-        <div className="space-y-1">
-          <label className="font-label-caps text-label-caps text-outline uppercase block">Email Address</label>
-          <input
-            className="border-0 border-b border-outline-variant bg-transparent w-full py-3 transition-colors outline-none focus:ring-0 focus:border-primary font-body-base text-on-surface opacity-70 cursor-not-allowed"
-            placeholder="email@example.com"
+            className="border-0 border-b border-outline-variant bg-transparent w-full py-3 outline-none focus:ring-0 font-body-base text-on-surface opacity-70 cursor-not-allowed"
             type="email"
             value={userFromDB?.email || ''}
-            disabled
+            readOnly
+            aria-readonly="true"
+            aria-describedby="account-email-help"
           />
+          <p id="account-email-help" className="text-[12px] pt-1 text-on-surface-variant/70">
+            This is how you sign in, so it can't be changed here. To change it, please contact the shop.
+          </p>
         </div>
 
         {/* Action Footer */}

@@ -40,45 +40,16 @@ router.get("/me", verifyJWT, async (req, res) => {
 // PATCH /api/users/me — update authenticated user's profile
 router.patch("/me", verifyJWT, validate(updateProfileSchema), async (req, res) => {
   try {
-    const { name, phone, photoURL, email } = req.body;
+    // `email` never reaches here: updateProfileSchema refuses it, because the
+    // address is the verified sign-in identity. Only these fields are written.
+    const { name, phone, photoURL } = req.body;
     const updateData = {};
-    const unsetData = {};
     if (name !== undefined) updateData.name = name;
     if (photoURL !== undefined) updateData.photoURL = photoURL;
 
-    // Optional contact detail. Not verified, and never used to sign in — the
-    // customer's identity remains their phone number.
-    if (email !== undefined) {
-      const cleaned = String(email).trim().toLowerCase();
-
-      if (cleaned === "") {
-        // Clearing it must REMOVE the field, not write null or "".
-        //
-        // The index is `unique + sparse`. Sparse skips documents where the
-        // field is absent, but null and "" are ordinary values and do get
-        // indexed — so the moment a second customer "cleared" their email,
-        // they would collide with the first on a duplicate-key error that
-        // looks nothing like its cause. OTP accounts are created without the
-        // field at all, and clearing has to return them to exactly that state.
-        unsetData.email = "";
-      } else {
-        // Case-insensitive comparison: "A@x.com" and "a@x.com" are the same
-        // mailbox, and storing both would defeat the uniqueness check even
-        // though the index would happily accept them as distinct strings.
-        const owner = await User.findOne({ email: cleaned });
-        if (owner && String(owner._id) !== String(req.user.userId)) {
-          return res
-            .status(409)
-            .json({ error: "That email address is already linked to another account" });
-        }
-        updateData.email = cleaned;
-      }
-    }
-
-    // Phone is the account's identity, so this route has to apply exactly the
-    // same normalisation as the OTP flow. Writing req.body.phone straight
-    // through was a second way to create the duplicate-account problem — and a
-    // customer could also have taken a number already belonging to someone else.
+    // The delivery contact number. No longer a sign-in identity, but still one
+    // per account: normalised to +91XXXXXXXXXX so spellings cannot dodge the
+    // unique index, and a number already on another account is refused.
     if (phone !== undefined) {
       const normalized = normalizeIndianPhone(phone);
       if (!normalized.ok) {
@@ -95,21 +66,19 @@ router.patch("/me", verifyJWT, validate(updateProfileSchema), async (req, res) =
       updateData.phone = normalized.phone;
     }
 
-    const mutation = {};
-    if (Object.keys(updateData).length) mutation.$set = updateData;
-    if (Object.keys(unsetData).length) mutation.$unset = unsetData;
-
     const user = await User.findByIdAndUpdate(
       req.user.userId,
-      mutation,
+      Object.keys(updateData).length ? { $set: updateData } : {},
       { new: true }
-    ).select("-passwordHash");
+    )
+      .select("-passwordHash")
+      .lean();
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    res.json({ success: true, data: user });
+    res.json({ success: true, data: { ...user, ...profileStatus(user) } });
   } catch (error) {
     // The check above is a courtesy, not the guarantee. Two requests can both
     // pass it and race to write; the unique index is what actually prevents a

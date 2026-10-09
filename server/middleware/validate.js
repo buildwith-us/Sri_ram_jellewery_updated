@@ -270,20 +270,18 @@ export const newsletterSchema = z.object({
 // role and passwordHash are deliberately absent — role changes go through the
 // requireAdmin route.
 export const updateProfileSchema = z.object({
-  name: z.string().min(1, "Name is required").max(100).optional(),
+  name: z.string().trim().min(1, "Name is required").max(100, "Name must be under 100 characters").optional(),
+  // The delivery contact number. Validated as an Indian mobile, stored as
+  // +91XXXXXXXXXX and de-duplicated by the handler. Not a sign-in identity.
   phone: z.string().max(20).optional(),
   photoURL: z.string().max(500).optional(),
-
-  // Optional contact detail, deliberately not a credential. Customers
-  // authenticate with a phone and a one-time code; this address is never used
-  // to sign in, and it is not verified — an unconfirmed email is exactly as
-  // trustworthy as the name typed next to it, which is the accepted trade here.
-  //
-  // The empty string is permitted on purpose: it is how the form expresses
-  // "clear this field", which the handler turns into an $unset rather than
-  // writing a value. See the handler for why that distinction matters.
+  // The email address IS the sign-in identity, verified by the code the
+  // customer signed in with. It cannot be set here: an unverified change would
+  // hand the account to whoever owns the new address, and clearing it would
+  // lock the customer out. Refused loudly rather than silently stripped, so a
+  // client still sending it finds out. (A verified change flow is separate.)
   email: z
-    .union([z.email("Enter a valid email address"), z.literal("")])
+    .never({ error: "Your email address is how you sign in, so it can't be changed here. Please contact the shop to change it." })
     .optional(),
 });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { useApp, mocks } from "../helpers/app.js";
 import {
   seedCatalog,
@@ -498,6 +498,38 @@ describe("cart clearing and Buy Now", () => {
 });
 
 describe("owner alerts on order creation", () => {
+  it("the customer's profile phone is copied onto every order (COD and card)", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const cod = await placeOrder(c.token, [{ productId: "gold-ring" }]);
+    const card = await createPayment(c.token, [{ productId: "silver-anklet" }]);
+    expect((await Order.findById(cod.body.data._id).lean()).phone).toBe(c.user.phone);
+    expect((await Order.findById(card.body.orderId).lean()).phone).toBe(c.user.phone);
+  });
+
+  it("with no mobile on the shipping address, the owner's alert still gets a number (the profile phone)", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    await placeOrder(c.token, [{ productId: "gold-ring" }], { shippingAddress: { ...SHIPPING, mobileNumber: undefined, number: undefined } });
+    const { order } = mocks().whatsapp.sendOrderAlert.mock.calls[0][0];
+    const wa = await vi.importActual("../../server/utils/whatsapp.js");
+    process.env.WHATSAPP_TOKEN = "t";
+    process.env.WHATSAPP_PHONE_NUMBER_ID = "1";
+    process.env.ADMIN_WHATSAPP_NUMBER = "91";
+    const fetchMock = vi.fn(async () => ({ ok: true, text: async () => "" }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await wa.sendOrderAlert({ order: order.toObject ? order.toObject() : order });
+      const text = JSON.parse(fetchMock.mock.calls[0][1].body).text.body;
+      expect(text).toContain(c.user.phone);
+      expect(text).not.toMatch(/\n—\n/);
+    } finally {
+      delete process.env.WHATSAPP_TOKEN;
+      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+      delete process.env.ADMIN_WHATSAPP_NUMBER;
+    }
+  });
+
   it("COD order alerts the owner once", async () => {
     await seedCatalog();
     const c = await makeCustomer();

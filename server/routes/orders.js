@@ -1,5 +1,6 @@
 import express from "express";
 import { Order } from "../models/Order.js";
+import { User } from "../models/User.js";
 import { Cart } from "../models/Cart.js";
 import { Product } from "../models/Product.js";
 import { computePrice } from "../utils/computePrice.js";
@@ -161,7 +162,11 @@ router.post("/", verifyJWT, validate(createOrderSchema), async (req, res) => {
       return res.status(409).json({ error: outOfStockMessage(reservation) });
     }
 
+    // Profile phone, for the owner's delivery call (see Order.phone).
+    const customer = await User.findById(req.user.userId).select("phone").lean();
+
     const newOrder = new Order({
+      phone: customer?.phone || undefined,
       orderId: `ORD-${Date.now()}`,
       userId: req.user.userId,
       email: req.user.email,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { useApp } from "../helpers/app.js";
-import { seedCatalog, makeCustomer, makeAdmin, uniquePhone, SHIPPING } from "../helpers/factories.js";
+import { seedCatalog, makeCustomer, makeAdmin, uniquePhone, customerViaOtp, SHIPPING } from "../helpers/factories.js";
 import { Cart } from "../../server/models/Cart.js";
 import { Wishlist } from "../../server/models/Wishlist.js";
 import { User } from "../../server/models/User.js";
@@ -161,27 +161,55 @@ describe("users — self service", () => {
     expect(res.body.data).toMatchObject({ name: "New Name", phone: `+91${phone}`, role: "USER" });
   });
 
-  it("PATCH /me email: lower-cased; clearing unsets it; two customers can both clear", async () => {
+  it("PATCH /me: email is the sign-in identity — any change, including clearing it, is refused", async () => {
+    const c = await makeCustomer();
+    for (const email of ["new@example.com", "", c.user.email.toUpperCase()]) {
+      const res = await ctx.api(c.token).patch("/api/users/me").send({ email });
+      expect(res.status, JSON.stringify(email)).toBe(400);
+      expect(res.body.error).toMatch(/contact the shop/);
+    }
+    const after = await User.findById(c.user._id).lean();
+    expect(after.email).toBe(c.user.email);
+    expect(after.emailKey).toBe(c.user.emailKey);
+  });
+
+  it("PATCH /me: emailKey and role in the body are ignored (identity fields are not writable)", async () => {
+    const c = await makeCustomer();
+    const res = await ctx.api(c.token).patch("/api/users/me").send({ name: "Still Me", emailKey: "victim@example.com", role: "ADMIN" });
+    expect(res.status).toBe(200);
+    const after = await User.findById(c.user._id).lean();
+    expect(after).toMatchObject({ name: "Still Me", emailKey: c.user.emailKey, role: "USER" });
+  });
+
+  it("PATCH /me: someone else's phone → 409", async () => {
     const a = await makeCustomer();
     const b = await makeCustomer();
-    expect((await ctx.api(a.token).patch("/api/users/me").send({ email: "Asha@Example.COM" })).body.data.email).toBe("asha@example.com");
-    await ctx.api(a.token).patch("/api/users/me").send({ email: "" });
-    await ctx.api(b.token).patch("/api/users/me").send({ email: "b@example.com" });
-    const clearB = await ctx.api(b.token).patch("/api/users/me").send({ email: "" });
-    expect(clearB.status).toBe(200);
-    expect((await User.findById(a.user._id).lean()).email).toBeUndefined();
-  });
-
-  it("PATCH /me: someone else's email or phone → 409", async () => {
-    const a = await makeCustomer({ email: "taken@example.com" });
-    const b = await makeCustomer();
-    expect((await ctx.api(b.token).patch("/api/users/me").send({ email: "TAKEN@example.com" })).status).toBe(409);
     expect((await ctx.api(b.token).patch("/api/users/me").send({ phone: a.user.phone })).status).toBe(409);
+    // Same number in another spelling is the same number.
+    const national = a.user.phone.replace("+91", "");
+    expect((await ctx.api(b.token).patch("/api/users/me").send({ phone: `0${national}` })).status).toBe(409);
   });
 
-  it("PATCH /me invalid phone/email → 400", async () => {
+  it("registration: a new email-code customer adds name + phone and the profile becomes complete", async () => {
+    const s = await customerViaOtp(ctx.api);
+    expect(s.profileComplete).toBe(false);
+    const phone = uniquePhone();
+    const res = await ctx.api(s.token).patch("/api/users/me").send({ name: "  Asha Raman  ", phone: `+91 ${phone}` });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ name: "Asha Raman", phone: `+91${phone}`, profileComplete: true, missing: [] });
+    expect((await ctx.api(s.token).get("/api/users/me")).body.data.profileComplete).toBe(true);
+  });
+
+  it("registration: the phone cannot be cleared once set", async () => {
+    const c = await makeCustomer();
+    expect((await ctx.api(c.token).patch("/api/users/me").send({ phone: "" })).status).toBe(400);
+    expect((await User.findById(c.user._id).lean()).phone).toBe(c.user.phone);
+  });
+
+  it("PATCH /me invalid phone or any email → 400", async () => {
     const c = await makeCustomer();
     expect((await ctx.api(c.token).patch("/api/users/me").send({ phone: "123" })).status).toBe(400);
+    expect((await ctx.api(c.token).patch("/api/users/me").send({ phone: "5123456789" })).status).toBe(400);
     expect((await ctx.api(c.token).patch("/api/users/me").send({ email: "nope" })).status).toBe(400);
   });
 

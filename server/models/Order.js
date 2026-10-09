@@ -69,6 +69,10 @@ const OrderSchema = new mongoose.Schema({
   paidAt: { type: Date, default: null },
 
   shippingAddress: { type: Object },
+  // The customer's profile phone, copied when the order is placed. The owner's
+  // WhatsApp alert uses it when the shipping address carries no mobile, so it
+  // never has to show "—" for a number to call about delivery.
+  phone: { type: String },
   createdAt: { type: Date, default: Date.now },
 
 });

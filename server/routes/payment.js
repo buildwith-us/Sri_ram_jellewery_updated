@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import { Order } from "../models/Order.js";
+import { User } from "../models/User.js";
 import { Product } from "../models/Product.js";
 import { computePrice } from "../utils/computePrice.js";
 import { verifyJWT } from "../middleware/auth.js";
@@ -150,7 +151,11 @@ router.post("/create-order", verifyJWT, validate(createPaymentOrderSchema), asyn
       });
 
       // Create order in our DB with pending status
+      // Profile phone, for the owner's delivery call (see Order.phone).
+      const customer = await User.findById(req.user.userId).select("phone").lean();
+
       order = await Order.create({
+        phone: customer?.phone || undefined,
         orderId: razorpayOrder.receipt,
         userId: req.user.userId,
         email: req.user.email,
