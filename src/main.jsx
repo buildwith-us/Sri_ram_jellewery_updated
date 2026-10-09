@@ -27,8 +27,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           {/* No <Toaster> here. It sat outside RouterProvider, so any toast
               containing a <Link> — the 30s login nudge does — rendered without
               router context, threw, and tripped the ErrorBoundary above,
-              replacing the whole app with the error fallback. MainLayout and
-              DashboardLayout each mount a Toaster inside the router. */}
+              replacing the whole app with the error fallback. AppShell
+              mounts the one Toaster, inside the router. */}
           <RouterProvider router={router} />
         </AuthProvider>
       </QueryClientProvider>
