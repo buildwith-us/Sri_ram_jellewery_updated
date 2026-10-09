@@ -11,13 +11,18 @@ const BCRYPT_SALT_ROUNDS = 12;
 
 const router = express.Router();
 
+// Never sent back in any user response: the password hash, and the sign-in
+// code's hash and expiry. A bcrypt hash of a 6-digit code can be brute-forced
+// offline within its 5-minute life, so it is as sensitive as the code itself.
+const HIDDEN_USER_FIELDS = "-passwordHash -otpHash -otpExpiresAt";
+
 // ─── Current User Profile ────────────────────────────────────────────────────
 
 // GET /api/users/me — get authenticated user's profile
 router.get("/me", verifyJWT, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId)
-      .select("-passwordHash")
+      .select(HIDDEN_USER_FIELDS)
       .lean();
 
     if (!user) {
@@ -71,7 +76,7 @@ router.patch("/me", verifyJWT, validate(updateProfileSchema), async (req, res) =
       Object.keys(updateData).length ? { $set: updateData } : {},
       { new: true }
     )
-      .select("-passwordHash")
+      .select(HIDDEN_USER_FIELDS)
       .lean();
 
     if (!user) {
@@ -141,7 +146,7 @@ router.patch("/shipping-address", verifyJWT, validate(shippingAddressSchema), as
       req.user.userId,
       { $set: { shippingAddress: req.body } },
       { new: true }
-    );
+    ).select(HIDDEN_USER_FIELDS);
     if (!user) return res.status(404).json({ error: "User not found" });
     res.json({ success: true, modifiedCount: 1, data: user });
   } catch (error) {
@@ -156,7 +161,7 @@ router.patch("/delete-address", verifyJWT, async (req, res) => {
       req.user.userId,
       { $unset: { shippingAddress: "" } },
       { new: true }
-    );
+    ).select(HIDDEN_USER_FIELDS);
     if (!user) return res.status(404).json({ error: "User not found" });
     res.json({ success: true, modifiedCount: 1, data: user });
   } catch (error) {
@@ -259,7 +264,7 @@ router.delete("/me/addresses/:id", verifyJWT, async (req, res) => {
 // GET /api/users — admin list all users
 router.get("/", verifyJWT, requireAdmin, async (req, res) => {
   try {
-    const users = await User.find().select("-passwordHash").lean();
+    const users = await User.find().select(HIDDEN_USER_FIELDS).lean();
     res.json(users);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch users" });

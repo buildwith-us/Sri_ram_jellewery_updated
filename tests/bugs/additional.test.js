@@ -549,14 +549,28 @@ describe("B9–B11 · rate limiting gaps (NODE_ENV=production)", () => {
 
 // ─── B12 ─────────────────────────────────────────────────────────────────────
 
-describe("B12 · OTP hashes are returned by user endpoints", () => {
-  bug("B12a: GET /api/users/me omits otpHash", async () => {
+describe("B12 · OTP hashes were returned by user endpoints (fixed)", () => {
+  it("B12a: GET /api/users/me omits otpHash", async () => {
     const c = await makeCustomer({ otpHash: "$2b$12$x", otpExpiresAt: new Date() });
     const res = await ctx.api(c.token).get("/api/users/me");
     expect(res.body.data.otpHash).toBeUndefined();
   });
 
-  bug("B12b: GET /api/users (admin) omits every customer's otpHash", async () => {
+  it("B12: no self-service response carries the code hash, its expiry or a password hash", async () => {
+    const c = await makeCustomer({ otpHash: "$2b$12$x", otpExpiresAt: new Date(Date.now() + 60000), passwordHash: "$2b$12$p" });
+    const responses = [
+      await ctx.api(c.token).get("/api/users/me"),
+      await ctx.api(c.token).patch("/api/users/me").send({ name: "N" }),
+      await ctx.api(c.token).patch("/api/users/shipping-address").send(SHIPPING),
+      await ctx.api(c.token).patch("/api/users/delete-address"),
+    ];
+    for (const r of responses) {
+      expect(r.status).toBe(200);
+      for (const f of ["otpHash", "otpExpiresAt", "passwordHash"]) expect(r.body.data[f], `${r.req.path} ${f}`).toBeUndefined();
+    }
+  });
+
+  it("B12b: GET /api/users (admin) omits every customer's otpHash", async () => {
     const admin = await makeAdmin();
     await makeCustomer({ otpHash: "$2b$12$x", otpExpiresAt: new Date(Date.now() + 60000) });
     const res = await ctx.api(admin.token).get("/api/users");
