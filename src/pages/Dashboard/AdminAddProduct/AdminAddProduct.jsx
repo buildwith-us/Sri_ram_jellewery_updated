@@ -146,7 +146,9 @@ const AdminAddProduct = () => {
       stock: parseInt(data.stock) || 0,
       carate: data.carate ? parseInt(data.carate) : null,
       newArrival: badges?.indexOf("newArrival") !== -1 ? true : false,
-      badge: badges?.indexOf("hot") !== -1 ? "HOT" : false,
+      // The badge is a label, not a flag: "HOT" or none (null). Sending false
+      // used to be stored as the text "false" (S9b).
+      badge: badges?.includes("hot") ? "HOT" : null,
       flashSale: badges?.indexOf("flashSale") !== -1 ? true : false,
       addedAt: new Date(),
     };
