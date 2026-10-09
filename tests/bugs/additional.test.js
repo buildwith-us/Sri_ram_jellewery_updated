@@ -666,8 +666,20 @@ describe("B13–B14 · cart", () => {
 
 // ─── B15 ─────────────────────────────────────────────────────────────────────
 
-describe("B15 · password reset token is not claimed atomically", () => {
-  bug("B15: two concurrent resets with one token → exactly one succeeds", async () => {
+describe("B15 · password reset token was not claimed atomically (fixed)", () => {
+  it("B15: of two concurrent resets, only the winner's password signs in", async () => {
+    const admin = await makeAdmin();
+    await ctx.api().post("/api/auth/password/forgot").send({ email: admin.user.email });
+    const token = mocks().resendSend.mock.calls.at(-1)[0].html.match(/token=([0-9a-f]{64})/)[1];
+    const passwords = ["FirstNewPass!1", "SecondNewPass!2"];
+    const results = await Promise.all(passwords.map((password) => ctx.api().post("/api/auth/password/reset").send({ token, password })));
+    const winner = passwords[results.findIndex((r) => r.status === 200)];
+    const loser = passwords.find((p) => p !== winner);
+    expect((await ctx.api().post("/api/auth/login").send({ email: admin.user.email, password: winner })).status).toBe(200);
+    expect((await ctx.api().post("/api/auth/login").send({ email: admin.user.email, password: loser })).status).toBe(401);
+  });
+
+  it("B15: two concurrent resets with one token → exactly one succeeds", async () => {
     const admin = await makeAdmin();
     await ctx.api().post("/api/auth/password/forgot").send({ email: admin.user.email });
     const html = mocks().resendSend.mock.calls.at(-1)[0].html;

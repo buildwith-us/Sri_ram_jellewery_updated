@@ -659,15 +659,22 @@ router.post("/password/reset", authLimiter, async (req, res) => {
     }
 
     const tokenHash = crypto.createHash("sha256").update(String(token)).digest("hex");
-    const record = await PasswordResetToken.findOne({ tokenHash });
 
     // One message for every failure mode — expired, spent, forged, unknown.
     const invalid = () =>
       res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
 
+    // Claim the token in ONE conditional update, before anything else. It used
+    // to be read, then the password hashed (~250 ms), then marked used — so
+    // two requests with the same link could both pass the check and both set
+    // a password (B15). Now only the request that flips usedAt proceeds.
+    const now = new Date();
+    const record = await PasswordResetToken.findOneAndUpdate(
+      { tokenHash, usedAt: null, expiresAt: { $gt: now } },
+      { usedAt: now },
+      { new: true }
+    );
     if (!record) return invalid();
-    if (record.usedAt) return invalid();
-    if (record.expiresAt < new Date()) return invalid();
 
     const user = await User.findById(record.userId);
     if (!user || user.role !== "ADMIN") return invalid();
@@ -675,11 +682,9 @@ router.post("/password/reset", authLimiter, async (req, res) => {
     user.passwordHash = await bcrypt.hash(String(password), BCRYPT_SALT_ROUNDS);
     await user.save();
 
-    // Burn the token, then end every existing session. Whoever triggered this
-    // reset may have been an intruder holding a live token; changing the
-    // password while leaving their session alive achieves nothing.
-    record.usedAt = new Date();
-    await record.save();
+    // End every existing session. Whoever triggered this reset may have been
+    // an intruder holding a live token; changing the password while leaving
+    // their session alive achieves nothing.
     await RefreshToken.deleteMany({ userId: user._id });
 
     console.warn(`🔐 Administrator password reset completed for ${user.email}.`);
