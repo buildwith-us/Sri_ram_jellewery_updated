@@ -1,4 +1,99 @@
-# Jewellery E-commerce Store
+# Sri Ram Jewellery
+
+> **Note:** much of this README below the "Before going live" section describes
+> an older Next.js/Postgres version and is out of date. The app is React + Vite
+> with an Express/MongoDB API; see `ARCHITECTURE.md`.
+
+## Before going live: email sign-in
+
+Customers sign in with their **email address**: they type it, receive a
+6-digit code by email, and type the code. There are no customer passwords.
+Administrators still sign in with email + password at `/admin-login`.
+
+Nothing below is optional for production — without it **nobody can sign in**.
+
+### 1. Environment variables (Vercel → Project → Settings → Environment Variables)
+
+| Variable | Value | Notes |
+|---|---|---|
+| `RESEND_API_KEY` | A Resend API key with **sending** access | From resend.com → API Keys |
+| `EMAIL_FROM` | e.g. `Sri Ram Jewellery <signin@mail.sriramjewellery.in>` | Must be on the domain you verify in step 2. **Never** a gmail.com (or other webmail) address — those are refused as misconfiguration. |
+| `EMAIL_REPLY_TO` | optional, e.g. `orders@sriramjewellery.in` | Where customer replies go |
+| `EMAIL_PROVIDER` | optional, default `resend` | Only `resend` is implemented |
+| `JWT_SECRET` | a long random string (`openssl rand -base64 32`) | Already required |
+| `MONGODB_URI`, `CRON_SECRET`, `RAZORPAY_*`, `PUBLIC_SITE_URL`, `VITE_PUBLIC_SITE_URL` | as before | See `.env.example` |
+
+**Must NOT be set in production:** `ALLOW_TEST_OTP`, `TEST_OTP_EMAILS`.
+(The test code is refused in production anyway, and works only for addresses
+listed in `TEST_OTP_EMAILS` — but keep them out of production entirely.)
+
+**Preview deployments run as production** (`NODE_ENV=production`), so they need
+the same email variables. The console fallback below never runs on a preview.
+
+### What happens when email is not configured
+
+The server still starts and product pages keep working (same as a missing
+`JWT_SECRET`). It logs, at startup:
+
+```
+FATAL: email is not configured — … Sign-in codes cannot be sent: /api/auth/otp/request will return 503 until this is fixed.
+```
+
+and every code request returns **503** ("Sign-in codes can't be sent right
+now"). Locally, with `NODE_ENV=development` and no `RESEND_API_KEY`, codes are
+printed to the API console instead of emailed, so the flow can be tried without
+an account.
+
+Check the setup end to end with:
+
+```
+node server/scripts/testEmail.js you@example.com
+```
+
+### Resend's free tier: 100 emails a day
+
+Every sign-in attempt sends one email. On Resend's free plan the cap is
+**100 emails per day** (and 3,000 a month). When the cap is hit, Resend refuses
+the send and **nobody can sign in until it resets** — customers already signed
+in are unaffected. It is never silent:
+
+- the customer sees "We couldn't send your sign-in code just now. Please try
+  again in a few minutes." (HTTP 503)
+- the server logs, for every refused send:
+
+  ```
+  🚨 EMAIL SEND FAILED — sign-in-code to <address> via Resend: <Resend's reason, e.g. daily_quota_exceeded>. If this is a quota error, nobody can sign in until the quota resets or the plan is raised.
+  ```
+
+Set up a log alert on `EMAIL SEND FAILED`, and move to a paid Resend plan
+before launch traffic can approach 100 sign-ins a day.
+
+### 2. DNS records for the sending domain
+
+In Resend → Domains → **Add domain**. A sub-domain such as
+`mail.sriramjewellery.in` is recommended, so sign-in mail never affects the
+shop's main mailboxes. Resend then shows the exact records to add at your DNS
+host. **Copy the names and values from the Resend dashboard** — they depend on
+your account and region; the shapes are:
+
+| Purpose | Type | Name (host) | Value |
+|---|---|---|---|
+| SPF (bounce domain) | `MX` | `send.mail` | `feedback-smtp.<region>.amazonses.com`, priority `10` |
+| SPF | `TXT` | `send.mail` | `v=spf1 include:amazonses.com ~all` |
+| DKIM | `TXT` | `resend._domainkey.mail` | the public key Resend gives you (`p=MIGf…`) |
+| DMARC | `TXT` | `_dmarc` | `v=DMARC1; p=none; rua=mailto:dmarc@sriramjewellery.in` |
+
+- The SPF records sit on the `send.` sub-domain Resend uses for bounces, so
+  they do not clash with any SPF record you already have on the root domain.
+  Never publish a second SPF record on the same name; merge instead.
+- Start DMARC at `p=none`, read the reports for a couple of weeks, then move to
+  `p=quarantine`.
+- Wait until Resend shows the domain as **Verified** before setting
+  `EMAIL_FROM` to an address on it.
+
+---
+
+## Older notes (out of date)
 
 A modern, high-performance e-commerce application built with Next.js 16, TypeScript, Tailwind CSS, shadcn/ui, and Aceternity UI components.
 

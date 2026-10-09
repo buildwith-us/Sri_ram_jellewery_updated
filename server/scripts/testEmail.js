@@ -3,13 +3,13 @@
  *
  *   node server/scripts/testEmail.js you@example.com
  *
- * With RESEND_API_KEY set it sends a real message and prints the provider's id.
- * Without one it runs in dry-run and prints what would have been sent, so the
- * script is useful before an account exists.
+ * With RESEND_API_KEY and EMAIL_FROM set it sends a real message and prints the
+ * provider's id. In development without them it prints the message instead
+ * (console mode). Anywhere else without them it fails, exactly as sign-in
+ * codes would — see "Before going live" in README.md.
  *
- * Note: Resend's default `onboarding@resend.dev` sender can only deliver to the
- * email address that owns the Resend account. Sending anywhere else needs a
- * verified domain in EMAIL_FROM.
+ * EMAIL_FROM must be on a domain verified in Resend (never a gmail.com or other
+ * webmail address).
  */
 
 import dotenv from "dotenv";
