@@ -466,16 +466,35 @@ describe("B6 · dashboard revenue figures disagreed with each other (fixed — u
 
 // ─── B7 ──────────────────────────────────────────────────────────────────────
 
-describe("B7 · user input is compiled into regular expressions", () => {
-  bug.each([
+describe("B7 · user input was compiled into regular expressions (fixed)", () => {
+  it.each([
     ["/api/products/filter?category=("],
     ["/api/products/filter?search=("],
     ["/api/products/search?q=("],
     ["/api/products?category=("],
+    ["/api/products/search?q=(a%2B)%2B%24"],
+    ["/api/products/search?q=a&q=b"],
   ])("B7: %s → not a 500", async (url) => {
     await seedCatalog();
     const res = await ctx.api().get(url);
-    if (res.status >= 500) throw new Error(`500 for ${url}`);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  it("B7: search text is matched literally — metacharacters match themselves, not patterns", async () => {
+    await seedRates();
+    await createProduct("gold", { productId: "paren", name: "Ring (22K)" });
+    await createProduct("silver", { productId: "plain", name: "Ring 22K" });
+    const hit = (await ctx.api().get("/api/products/search?q=" + encodeURIComponent("(22K)"))).body.data;
+    expect(hit.map((p) => p.productId)).toEqual(["paren"]);
+    // "." is a literal dot, not "any character".
+    expect((await ctx.api().get("/api/products/search?q=Ring.22K")).body.data).toEqual([]);
+  });
+
+  it("B7: ordinary searches and category filters still work, case-insensitively", async () => {
+    await seedCatalog();
+    expect((await ctx.api().get("/api/products/search?q=ANKLET")).body.data.map((p) => p.productId)).toEqual(["silver-anklet"]);
+    expect((await ctx.api().get("/api/products/filter?category=silver")).body.map((p) => p.productId)).toEqual(["silver-anklet"]);
+    expect((await ctx.api().get("/api/products?category=Gold")).body.data).toHaveLength(2);
   });
 });
 
