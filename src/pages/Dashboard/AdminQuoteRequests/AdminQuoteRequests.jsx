@@ -1,13 +1,31 @@
 import React, { useState } from "react";
-import { useQuery } from "react-query";
+import { useQuery, useQueryClient } from "react-query";
 import Select from "react-select";
 import toast from "react-hot-toast";
 import { Pagination } from "react-pagination-bar";
 import useAxiosSecure from "../../../hooks/useAxiosSecure";
 import 'react-pagination-bar/dist/index.css';
 
+const formatPhone = (phone) => {
+  const national = String(phone || "").replace(/^\+91/, "");
+  return /^\d{10}$/.test(national) ? `+91 ${national.slice(0, 5)} ${national.slice(5)}` : phone;
+};
+
+/** How the enquiry came in. "whatsapp": the customer also opened a chat carrying the reference. */
+const ChannelBadge = ({ channel }) =>
+  channel === "whatsapp" ? (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#1f7a4d]/10 text-[#1f7a4d] font-label-caps text-[10px] whitespace-nowrap">
+      WhatsApp
+    </span>
+  ) : (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-primary/10 text-primary font-label-caps text-[10px]">
+      Form
+    </span>
+  );
+
 const AdminQuoteRequests = () => {
   const [axiosSecure] = useAxiosSecure();
+  const queryClient = useQueryClient();
   
   const { data: quoteRequests, isLoading: isQuotesLoading, refetch } = useQuery({
     queryKey: ["admin-quotes"],
@@ -25,6 +43,7 @@ const AdminQuoteRequests = () => {
       if (res.data.success) {
         toast.success("Quote status updated");
         refetch();
+        queryClient.invalidateQueries(["quote-summary"]); // the count in the navigation
       }
     })
     .catch((e) => {
@@ -62,6 +81,11 @@ const AdminQuoteRequests = () => {
       {/* Top Bar */}
       <header className="h-20 flex items-center justify-between px-6 md:px-margin-desktop bg-background/80 backdrop-blur-md border-b border-outline-variant/30 z-40 shrink-0">
         <h2 className="font-display-lg text-headline-md text-primary">Quote Requests</h2>
+        {quoteRequests?.length > 0 && (
+          <p className="text-sm text-on-surface-variant">
+            {quoteRequests.filter((q) => q.status === "Pending").length} pending
+          </p>
+        )}
       </header>
 
       {/* Main Content Area */}
@@ -72,9 +96,11 @@ const AdminQuoteRequests = () => {
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className="border-b border-outline-variant/50 bg-surface-container-high/50">
+                  <th className="px-6 py-4 font-label-caps text-outline text-[11px]">Ref</th>
                   <th className="px-6 py-4 font-label-caps text-outline text-[11px]">Product</th>
                   <th className="px-6 py-4 font-label-caps text-outline text-[11px]">Customer</th>
                   <th className="px-6 py-4 font-label-caps text-outline text-[11px]">Contact</th>
+                  <th className="px-6 py-4 font-label-caps text-outline text-[11px]">Via</th>
                   <th className="px-6 py-4 font-label-caps text-outline text-[11px]">Date</th>
                   <th className="px-6 py-4 font-label-caps text-outline text-[11px]">Status</th>
                 </tr>
@@ -82,10 +108,15 @@ const AdminQuoteRequests = () => {
               <tbody className="divide-y divide-outline-variant/20">
                 {isQuotesLoading ? (
                   <tr>
-                    <td colSpan="5" className="px-6 py-10 text-center text-outline">Loading requests...</td>
+                    <td colSpan="7" className="px-6 py-10 text-center text-outline">Loading requests...</td>
                   </tr>
                 ) : displayedQuotes?.map((quote) => (
-                  <tr key={quote._id} className="hover:bg-white/40 transition-colors group">
+                  <tr key={quote._id} className="hover:bg-white/40 transition-colors group" data-testid="quote-row">
+                    <td className="px-6 py-4">
+                      {/* What the customer's WhatsApp message quotes. Older
+                          enquiries were made before references existed. */}
+                      <p className="font-button-text text-on-surface whitespace-nowrap">{quote.quoteId || "—"}</p>
+                    </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         {quote.productImage && (
@@ -101,7 +132,17 @@ const AdminQuoteRequests = () => {
                       <p className="font-button-text text-on-surface">{quote.customerName}</p>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-button-text text-on-surface">{quote.customerMobile}</p>
+                      <a
+                        href={`tel:${quote.customerMobile}`}
+                        className="inline-flex items-center gap-1 min-h-11 font-button-text text-primary hover:underline whitespace-nowrap"
+                        aria-label={`Call ${quote.customerName} on ${formatPhone(quote.customerMobile)}`}
+                      >
+                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">call</span>
+                        {formatPhone(quote.customerMobile)}
+                      </a>
+                    </td>
+                    <td className="px-6 py-4">
+                      <ChannelBadge channel={quote.channel} />
                     </td>
                     <td className="px-6 py-4">
                       <p className="text-[13px] text-on-surface-variant">
@@ -126,7 +167,7 @@ const AdminQuoteRequests = () => {
                 ))}
                 {quoteRequests?.length === 0 && (
                   <tr>
-                    <td colSpan="5" className="px-6 py-10 text-center text-outline">No quote requests found.</td>
+                    <td colSpan="7" className="px-6 py-10 text-center text-outline">No quote requests found.</td>
                   </tr>
                 )}
               </tbody>

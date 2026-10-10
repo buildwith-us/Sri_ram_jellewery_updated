@@ -28,3 +28,13 @@ export const whatsAppLink = (text = whatsAppGreeting()) => {
   if (!number) return null;
   return `https://wa.me/${number}?text=${encodeURIComponent(text)}`;
 };
+
+/**
+ * The text a product enquiry opens WhatsApp with: the piece's name (from the
+ * catalogue, via the saved enquiry), a link to its page and the enquiry
+ * reference — so the owner can match the chat to the record in admin. No
+ * price and none of the customer's details: WhatsApp already shows who is
+ * writing, and a URL is not the place for them.
+ */
+export const enquiryMessage = ({ productName, productUrl, quoteId }) =>
+  `Hi, I'd like to know more about ${productName}.\n${productUrl}\nEnquiry ref: ${quoteId}`;

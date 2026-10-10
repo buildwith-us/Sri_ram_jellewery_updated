@@ -13,6 +13,7 @@ import { optimizeCloudinaryUrl } from "../../utils/cloudinaryImage";
 import { useLoginGate } from "../../context/LoginGateContext";
 import { useRegisterDialog } from "../../utils/dialogRegistry";
 import useTrackProductView from "../../hooks/useTrackProductView";
+import ProductEnquiry from "../../components/ProductEnquiry/ProductEnquiry";
 
 const DynamicProduct = () => {
   const { id } = useParams();
@@ -27,15 +28,10 @@ const DynamicProduct = () => {
   const { requireLogin } = useLoginGate();
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [quantity, setQuantity] = useState(1);
-  const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
-  const [quoteName, setQuoteName] = useState("");
-  const [quoteMobile, setQuoteMobile] = useState("");
-  const [quoteLoading, setQuoteLoading] = useState(false);
   const [isImageZoomed, setIsImageZoomed] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
-  // Both dialogs on this page tell the registry when they are open, so the
-  // timed sign-in prompt never appears on top of them.
-  useRegisterDialog("quote-modal", isQuoteModalOpen);
+  // The zoom dialog tells the registry when it is open, so the timed sign-in
+  // prompt never appears on top of it (ProductEnquiry registers its own).
   useRegisterDialog("image-zoom", isImageModalOpen);
 
   // Fetch this one product by id rather than pulling the whole catalogue and
@@ -134,32 +130,6 @@ const DynamicProduct = () => {
     });
   };
 
-  const handleQuoteRequest = async (e) => {
-    e.preventDefault();
-    if (!user) {
-      toast.error("Please login to request a quote.");
-      navigate("/login", { state: { from: location } });
-      return;
-    }
-    setQuoteLoading(true);
-    try {
-      await axiosSecure.post("/quotes", {
-        productId: dynamicProduct.productId || dynamicProduct._id,
-        productName: dynamicProduct.name,
-        productImage: dynamicProduct.img,
-        customerName: quoteName,
-        customerMobile: quoteMobile,
-        isQuoteOnly: dynamicProduct.isQuoteOnly || false,
-      });
-      alert("Quote requested! Our artisans will contact you via WhatsApp shortly.");
-      setIsQuoteModalOpen(false);
-    } catch (error) {
-      console.error(error);
-      alert("Failed to submit quote request. Please try again.");
-    } finally {
-      setQuoteLoading(false);
-    }
-  };
 
   if (isProductLoading) {
     return (
@@ -440,13 +410,8 @@ const DynamicProduct = () => {
                     </button>
                   </>
                 )}
-                <button 
-                  onClick={() => setIsQuoteModalOpen(true)}
-                  className="w-full bg-transparent border border-sand text-primary py-5 font-button-text text-button-text tracking-widest hover:bg-primary/5 active:scale-[0.98] transition-ui flex items-center justify-center gap-3 rounded-sm"
-                >
-                  <span className="material-symbols-outlined text-sm">mail</span>
-                  ENQUIRE NOW
-                </button>
+                {/* Priced or quote-only, the same two ways to enquire. */}
+                <ProductEnquiry product={dynamicProduct} />
               </div>
 
               {/* Accordion Details */}
@@ -483,61 +448,6 @@ const DynamicProduct = () => {
           </div>
         </div>
       </main>
-
-      {/* Quote Modal */}
-      {isQuoteModalOpen && (
-        <dialog id="quote_modal" className="modal modal-open">
-          <div className="modal-box bg-surface border border-outline-variant/30 rounded-sm">
-            <form method="dialog">
-              <button
-                aria-label="Close quote request"
-                onClick={() => setIsQuoteModalOpen(false)}
-                className="inline-flex items-center justify-center w-11 h-11 rounded-full text-on-surface hover:bg-surface-container transition-colors absolute right-2 top-2"
-              >
-                ✕
-              </button>
-            </form>
-            <h3 className="font-display-lg text-headline-sm text-primary mb-4">Request Quote</h3>
-            <p className="font-body-base text-on-surface-variant text-sm mb-6">
-              Our artisans will prepare a personalized quote and contact you.
-            </p>
-            <form onSubmit={handleQuoteRequest} className="space-y-4">
-              <div>
-                <label className="block font-label-caps text-xs text-on-surface-variant uppercase tracking-wider mb-2">Name</label>
-                <input 
-                  type="text" 
-                  value={quoteName}
-                  onChange={(e) => setQuoteName(e.target.value)}
-                  className="w-full bg-surface-container-low border border-outline-variant/50 px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-ui rounded-sm"
-                  placeholder="Your Full Name"
-                  required 
-                />
-              </div>
-              <div>
-                <label className="block font-label-caps text-xs text-on-surface-variant uppercase tracking-wider mb-2">WhatsApp Number</label>
-                <input 
-                  type="tel" 
-                  value={quoteMobile}
-                  onChange={(e) => setQuoteMobile(e.target.value)}
-                  className="w-full bg-surface-container-low border border-outline-variant/50 px-4 py-3 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-ui rounded-sm"
-                  placeholder="+91"
-                  required 
-                />
-              </div>
-              <button 
-                type="submit" 
-                disabled={quoteLoading}
-                className="w-full mt-4 bg-primary text-white py-4 font-button-text uppercase tracking-widest hover:bg-primary-container transition-colors disabled:opacity-70 rounded-sm"
-              >
-                {quoteLoading ? "Submitting..." : "Submit Request"}
-              </button>
-            </form>
-          </div>
-          <form method="dialog" className="modal-backdrop">
-            <button onClick={() => setIsQuoteModalOpen(false)}>close</button>
-          </form>
-        </dialog>
-      )}
 
       {/* Image Zoom Modal */}
       <dialog id="imageModal" className="modal" onClose={() => setIsImageModalOpen(false)}>

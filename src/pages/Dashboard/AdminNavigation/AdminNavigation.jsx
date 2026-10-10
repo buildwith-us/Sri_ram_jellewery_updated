@@ -2,12 +2,25 @@ import React, { useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import useAuthContext from "../../../hooks/useAuthContext";
 import useUserInfo from "../../../hooks/useUserInfo";
+import useAxiosSecure from "../../../hooks/useAxiosSecure";
+import { useQuery } from "react-query";
 
 const AdminNavigation = () => {
   const { user, logOut } = useAuthContext();
   const [userFromDB] = useUserInfo();
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [axiosSecure] = useAxiosSecure();
+
+  // Enquiries waiting for the owner. The WhatsApp alerts that would tell him
+  // are not configured yet, so the count here is how a new enquiry gets seen:
+  // refreshed every minute, on every admin page.
+  const { data: pendingQuotes = 0 } = useQuery({
+    queryKey: ["quote-summary"],
+    enabled: userFromDB?.role === "ADMIN",
+    refetchInterval: 60_000,
+    queryFn: async () => (await axiosSecure.get("/quotes/summary")).data?.data?.pending || 0,
+  });
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -33,10 +46,13 @@ const AdminNavigation = () => {
         <span className="font-display-lg text-headline-sm text-primary">Admin Portal</span>
         <button
           onClick={() => setMobileNavOpen(true)}
-          className="text-on-surface p-2 -mr-2"
-          aria-label="Open menu"
+          aria-label={pendingQuotes ? `Open menu (${pendingQuotes} pending quote requests)` : "Open menu"}
+          className="text-on-surface p-2 -mr-2 relative"
         >
           <span className="material-symbols-outlined">menu</span>
+          {pendingQuotes > 0 && (
+            <span className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-error" aria-hidden="true" />
+          )}
         </button>
       </div>
 
@@ -101,6 +117,15 @@ const AdminNavigation = () => {
           <NavLink to="/dashboard/adminQuoteRequests" className={navLinkClass("/adminQuoteRequests")}>
             <span className="material-symbols-outlined text-[20px]">request_quote</span>
             <span className="font-button-text">Quote Requests</span>
+            {pendingQuotes > 0 && (
+              <span
+                className="ml-auto min-w-6 h-6 px-2 inline-flex items-center justify-center rounded-full bg-error text-on-error text-[11px] font-bold"
+                aria-label={`${pendingQuotes} pending`}
+                data-testid="pending-quotes"
+              >
+                {pendingQuotes}
+              </span>
+            )}
           </NavLink>
 
           <div className="pt-6 pb-2 px-4">

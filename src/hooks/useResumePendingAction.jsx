@@ -44,6 +44,15 @@ const useResumePendingAction = () => {
       return;
     }
 
+    // An enquiry: stay on the piece's page (no /welcome detour). It cannot be
+    // sent from here — opening WhatsApp needs the customer's own tap.
+    if (pending.type === "enquire") {
+      hasRun.current = true;
+      clearPendingAction();
+      toast.success("You're signed in. Tap your enquiry button again to send it.");
+      return;
+    }
+
     // Every intent needs the product record to rebuild its payload, so wait for
     // the catalogue rather than consuming the intent and silently doing nothing.
     if (!products?.length) return;

@@ -135,13 +135,18 @@ export const updateRatesSchema = z.object({
   { message: "Must provide at least one rate to update (gold or silver)" }
 );
 
+// Only what the customer chooses. productName, productImage and isQuoteOnly
+// come from the catalogue (routes/quotes.js); if a client sends them, this
+// schema strips them before the route sees the body.
 export const quoteRequestSchema = z.object({
   productId: requiredString("Product ID is required"),
-  productName: z.string().optional(),
-  productImage: z.string().optional(),
-  customerName: requiredString("Customer name is required"),
+  customerName: z
+    .string({ error: "Customer name is required" })
+    .trim()
+    .min(1, "Customer name is required")
+    .max(100, "Name must be under 100 characters"),
   customerMobile: z.string({ error: "Valid mobile number is required" }).min(10, "Valid mobile number is required"),
-  isQuoteOnly: booleanish.nullish(),
+  channel: z.enum(["form", "whatsapp"], { message: "Channel must be form or whatsapp" }).optional(),
 });
 
 export const quoteStatusSchema = z.object({

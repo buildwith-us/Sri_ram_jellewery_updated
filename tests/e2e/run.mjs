@@ -984,7 +984,7 @@ const runWhatsAppChatFlow = async (browser, viewport, seeded) => {
         expectTrue(!overlap, `overlaps ${await target.first().evaluate((e) => e.outerHTML.slice(0, 60))}`);
       }
     }],
-    ["Steps aside for the sign-in modal, the quote modal and the cart drawer", async () => {
+    ["Steps aside for the sign-in modal and the cart drawer", async () => {
       await goto(page, `/products/${seeded.p4._id}/description`);
       await dismissNudge(page);
       await shown("load");
@@ -993,13 +993,6 @@ const runWhatsAppChatFlow = async (browser, viewport, seeded) => {
       await hidden("the sign-in modal");
       await page.keyboard.press("Escape");
       await shown("closing the sign-in modal");
-      await page.getByRole("button", { name: /enquire now/i }).click();
-      await hidden("the quote modal");
-      // Clicked through the DOM: with the icon font blocked, the phone-width
-      // product page overflows and the ✕ sits outside the 390px viewport
-      // (a known, separate issue).
-      await page.getByRole("button", { name: /close quote request/i }).dispatchEvent("click");
-      await shown("closing the quote modal");
       await page.getByRole("button", { name: /^cart/i }).first().click();
       await hidden("the cart drawer");
     }],
@@ -1013,6 +1006,149 @@ const runWhatsAppChatFlow = async (browser, viewport, seeded) => {
           await shown("closing the menu");
         }]]
       : []),
+  ]);
+  return context;
+};
+
+/**
+ * Enquiries: "Ask on WhatsApp" (priced and quote-only) saves the enquiry
+ * first, then opens the chat with the piece, its link and the SRQ reference;
+ * a blocked pop-up or a failed save never loses or fakes an enquiry; the form
+ * is still there.
+ */
+const runEnquiryFlow = async (browser, viewport, seeded, shared) => {
+  const context = await newContext(browser, viewport);
+  const page = await context.newPage();
+  const p4 = seeded.p4;
+  const email = freshEmail(`enquiry-${viewport}`);
+  const phone = freshPhone();
+  const customerName = `Enquirer ${viewport}`;
+  const refs = [];
+  let quoteOnly;
+
+  const quotes = async () => (await api("GET", "/quotes", { token: await adminToken() })).body.data;
+  const askButton = () => page.getByRole("button", { name: /ask on whatsapp/i });
+  /** Click "Ask on WhatsApp" and capture the wa.me URL the opened window was sent to. */
+  const askAndCapture = async () => {
+    // Caught here so a failed step reports, rather than rejecting later.
+    const waRequest = context.waitForEvent("request", { predicate: (r) => r.url().startsWith("https://wa.me/"), timeout: 15_000 }).catch((e) => e);
+    const popup = context.waitForEvent("page", { timeout: 10_000 }).catch((e) => e);
+    await askButton().click();
+    const opened = await popup;
+    if (opened instanceof Error) {
+      const shown = await page.getByRole("dialog").innerText().catch(() => "(no dialog)");
+      throw new Error(`no WhatsApp window opened; on screen: ${shown.slice(0, 200)}`);
+    }
+    const request = await waRequest;
+    if (request instanceof Error) throw new Error(`the window was never sent to wa.me (${request.message})`);
+    const url = new URL(request.url());
+    await page.getByTestId("enquiry-done").waitFor({ timeout: 10_000 });
+    return url;
+  };
+  const checkMessage = (url, product) => {
+    expectTrue(url.pathname === `/${WA_NUMBER}`, `chat goes to ${url.pathname}`);
+    const text = url.searchParams.get("text") || "";
+    expectTrue(text.includes(product.name), `message lacks the product name: ${text}`);
+    expectTrue(text.includes(`/products/${product._id}/description`), `message lacks the product link: ${text}`);
+    const ref = text.match(/Enquiry ref: (SRQ-\d{8}-\d{4,})/)?.[1];
+    expectTrue(ref, `message lacks the reference: ${text}`);
+    for (const secret of ["₹", customerName, phone, email, "price"]) {
+      expectTrue(!text.toLowerCase().includes(String(secret).toLowerCase()), `message contains "${secret}": ${text}`);
+    }
+    return ref;
+  };
+
+  await flow(viewport, "Enquiries", page, [
+    ["A guest is asked to sign in first", async () => {
+      const created = await api("POST", "/products", {
+        token: await adminToken(),
+        body: { name: `E2E Temple Set ${viewport}`, category: "Gold", isQuoteOnly: true, metalType: "gold" },
+      });
+      expectTrue(created.status === 201, `quote-only product: ${created.status} ${JSON.stringify(created.body)}`);
+      quoteOnly = created.body.data;
+      await goto(page, `/products/${p4._id}/description`);
+      await dismissNudge(page);
+      const before = (await quotes()).length;
+      await askButton().click();
+      await page.getByRole("dialog").getByText(/sign in to ask about this piece/i).waitFor({ timeout: 5_000 });
+      expectTrue((await quotes()).length === before, "an enquiry was saved for a guest");
+      await signInWithEmail(page, email, { name: customerName, phone });
+      await page.getByRole("dialog").waitFor({ state: "detached", timeout: 10_000 });
+      // Still on the piece's page (no /welcome detour), told to tap again.
+      await page.getByText(/tap your enquiry button again/i).first().waitFor({ timeout: 5_000 });
+      expectTrue(new URL(page.url()).pathname === `/products/${p4._id}/description`, `ended on ${page.url()}`);
+    }],
+    ["Priced piece: saved first, then WhatsApp opens with name, link and reference — no price, no personal details", async () => {
+      const before = (await quotes()).length;
+      const url = await askAndCapture();
+      const ref = checkMessage(url, p4);
+      expectTrue((await page.getByTestId("enquiry-ref").innerText()).trim() === ref, "dialog shows another reference");
+      const link = new URL(await page.getByRole("link", { name: /open whatsapp/i }).getAttribute("href"));
+      expectTrue(link.origin + link.pathname === url.origin + url.pathname && link.searchParams.get("text") === url.searchParams.get("text"), `fallback link differs: ${link}`);
+      const saved = (await quotes()).find((q) => q.quoteId === ref);
+      expectTrue((await quotes()).length === before + 1 && saved, "the enquiry was not saved");
+      expectTrue(saved.channel === "whatsapp" && saved.productName === p4.name && saved.customerMobile === `+91${phone}` && saved.isQuoteOnly === false, `saved: ${JSON.stringify(saved)}`);
+      refs.push(ref);
+      await page.getByRole("button", { name: /^done$/i }).click();
+    }],
+    ["Quote-only piece: the same", async () => {
+      await goto(page, `/products/${quoteOnly._id}/description`);
+      await page.getByText(/price on request/i).first().waitFor({ timeout: 10_000 });
+      const ref = checkMessage(await askAndCapture(), quoteOnly);
+      const saved = (await quotes()).find((q) => q.quoteId === ref);
+      expectTrue(saved?.isQuoteOnly === true && saved.channel === "whatsapp", `saved: ${JSON.stringify(saved)}`);
+      refs.push(ref);
+      await page.getByRole("button", { name: /^done$/i }).click();
+    }],
+    ["Pop-up blocked: the enquiry is still saved, the customer is told and can open the chat", async () => {
+      await page.evaluate(() => {
+        window.open = () => null;
+      });
+      const before = (await quotes()).length;
+      await askButton().click();
+      await page.getByTestId("enquiry-done").waitFor({ timeout: 10_000 });
+      await page.getByText(/didn't let whatsapp open, but your enquiry is saved/i).waitFor({ timeout: 3_000 });
+      const ref = (await page.getByTestId("enquiry-ref").innerText()).trim();
+      const link = new URL(await page.getByRole("link", { name: /open whatsapp/i }).getAttribute("href"));
+      expectTrue(checkMessage(link, quoteOnly) === ref, "fallback link carries another reference");
+      expectTrue((await quotes()).length === before + 1, "not saved when the pop-up was blocked");
+      refs.push(ref);
+      await page.reload();
+    }],
+    ["Save fails: the customer is told, no chat stays open, nothing is claimed", async () => {
+      await page.route("**/api/quotes", (route) =>
+        route.request().method() === "POST" ? route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"Failed to submit quote request"}' }) : route.continue()
+      );
+      const popup = context.waitForEvent("page", { timeout: 10_000 }).catch((e) => e);
+      await askButton().click();
+      const win = await popup;
+      if (win instanceof Error) throw new Error("no window opened on the tap");
+      await page.getByRole("dialog").getByText(/not sent/i).waitFor({ timeout: 10_000 });
+      for (let i = 0; i < 20 && !win.isClosed(); i++) await page.waitForTimeout(100);
+      expectTrue(win.isClosed(), "the blank WhatsApp window was left open");
+      expectTrue((await page.getByTestId("enquiry-done").count()) === 0, "claimed success");
+      await page.unroute("**/api/quotes");
+      await page.getByRole("button", { name: /close quote request/i }).dispatchEvent("click");
+    }],
+    ["The form is still there: prefilled, checks the number, saves a 'form' enquiry", async () => {
+      await page.getByRole("button", { name: /enquire now/i }).click();
+      // The floating chat button steps aside while the enquiry dialog is open.
+      await page.locator("#enquiry-name").waitFor({ timeout: 5_000 });
+      expectTrue((await page.locator('[data-testid="whatsapp-chat"]').count()) === 0, "the WhatsApp button is over the enquiry dialog");
+      expectTrue((await page.locator("#enquiry-name").inputValue()) === customerName, "name not prefilled");
+      await page.locator("#enquiry-mobile").fill("12345");
+      await page.getByRole("button", { name: /send enquiry/i }).click();
+      await page.getByRole("dialog").getByRole("alert").waitFor({ timeout: 3_000 });
+      const other = freshPhone();
+      await page.locator("#enquiry-mobile").fill(`0${other}`);
+      await page.getByRole("button", { name: /send enquiry/i }).click();
+      await page.getByTestId("enquiry-done").waitFor({ timeout: 10_000 });
+      const ref = (await page.getByTestId("enquiry-ref").innerText()).trim();
+      const saved = (await quotes()).find((q) => q.quoteId === ref);
+      expectTrue(saved?.channel === "form" && saved.customerMobile === `+91${other}`, `saved: ${JSON.stringify(saved)}`);
+      refs.push(ref);
+      shared[`${viewport}-enquiries`] = refs;
+    }],
   ]);
   return context;
 };
@@ -1117,6 +1253,32 @@ const runAdminFlows = async (browser, viewport, shared) => {
       await mine.page.getByText(/expected delivery by/i).first().waitFor({ timeout: 10_000 });
       const text = await mine.page.getByText(/expected delivery by/i).first().innerText();
       return text;
+    }],
+    ["Quote Requests: pending count in the menu; references and the WhatsApp badge per enquiry", async () => {
+      const refs = shared[`${viewport}-enquiries`] || [];
+      expectTrue(refs.length === 4, `expected 4 enquiries from the enquiry flow, got ${refs.length}`);
+      const pending = (await api("GET", "/quotes/summary", { token: await adminToken() })).body.data.pending;
+      await goto(page, "/dashboard/adminQuoteRequests");
+      if (viewport === "desktop") {
+        const badge = page.getByTestId("pending-quotes");
+        await badge.waitFor({ timeout: 10_000 });
+        expectTrue(Number(await badge.innerText()) === pending, `menu shows ${await badge.innerText()}, ${pending} pending`);
+      } else {
+        const menu = page.getByRole("button", { name: /open menu/i });
+        expectTrue(new RegExp(`${pending} pending`).test((await menu.getAttribute("aria-label")) || ""), "phone menu doesn't announce the pending count");
+      }
+      await page.getByTestId("quote-row").first().waitFor({ timeout: 10_000 });
+      const all = (await api("GET", "/quotes", { token: await adminToken() })).body.data;
+      for (const ref of refs) {
+        const q = all.find((x) => x.quoteId === ref);
+        // The table pages 8 at a time, newest first; these are the newest.
+        const row = page.getByTestId("quote-row").filter({ hasText: ref });
+        expectTrue((await row.count()) === 1, `${ref} not listed`);
+        const via = q.channel === "whatsapp" ? /whatsapp/i : /form/i;
+        expectTrue(via.test(await row.innerText()), `${ref} doesn't show "${q.channel}"`);
+        expectTrue((await row.locator(`a[href="tel:${q.customerMobile}"]`).count()) === 1, `${ref} mobile isn't tappable`);
+      }
+      return `${refs.length} enquiries, ${pending} pending`;
     }],
     ["Users: search by phone, tap-to-call, sort by spend; no sensitive fields", async () => {
       // Deliver the order approved above, so its customer has spend (B6:
@@ -1246,12 +1408,17 @@ const main = async () => {
     for (const viewport of ["desktop", "mobile"]) {
       // Rates reset to the seeded value so each viewport sees the same prices.
       const ctxs = [];
-      ctxs.push(await runCustomerFlows(browser, viewport, seeded, shared));
-      ctxs.push(await runTimedPromptFlow(browser, viewport, seeded));
-      ctxs.push(await runRegistrationFlow(browser, viewport, seeded));
-      ctxs.push(await runWhatsAppChatFlow(browser, viewport, seeded));
-      ctxs.push(await runAdminFlows(browser, viewport, shared));
-      ctxs.push(await runLegalPages(browser, viewport));
+      // E2E_ONLY=enquiry,whatsapp runs just the flows named (for debugging
+      // one flow; the admin flow needs the customer flows before it).
+      const only = (process.env.E2E_ONLY || "").toLowerCase().split(",").filter(Boolean);
+      const want = (name) => !only.length || only.some((o) => name.includes(o));
+      if (want("customer")) ctxs.push(await runCustomerFlows(browser, viewport, seeded, shared));
+      if (want("timed")) ctxs.push(await runTimedPromptFlow(browser, viewport, seeded));
+      if (want("registration")) ctxs.push(await runRegistrationFlow(browser, viewport, seeded));
+      if (want("whatsapp")) ctxs.push(await runWhatsAppChatFlow(browser, viewport, seeded));
+      if (want("enquiry")) ctxs.push(await runEnquiryFlow(browser, viewport, seeded, shared));
+      if (want("admin")) ctxs.push(await runAdminFlows(browser, viewport, shared));
+      if (want("legal")) ctxs.push(await runLegalPages(browser, viewport));
       for (const c of ctxs) await c.close();
       // The admin flow set gold to 7300; put it back for the next viewport.
       await fetch(`${API}/auth/login`, {

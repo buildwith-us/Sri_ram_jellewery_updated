@@ -59,18 +59,22 @@ const dispatch = async (text, skipSummary) => {
 };
 
 /**
- * Quote/enquiry alert. Unchanged behaviour.
+ * Quote/enquiry alert, with the enquiry's reference and how it came in.
  */
-export const sendWhatsAppAlert = async ({ customerName, customerMobile, productName, isQuoteOnly }) => {
+export const sendWhatsAppAlert = async ({ customerName, customerMobile, productName, isQuoteOnly, quoteId, channel }) => {
   const alertHeader = isQuoteOnly ? "🔔 New Enquiry (Quote Required)" : "🔔 New Enquiry (Priced Item)";
+  const ref = quoteId ? `Ref: ${quoteId}\n` : "";
+  const via = channel === "whatsapp" ? "Via: WhatsApp — the customer is opening a chat with this reference\n" : "";
 
   return dispatch(
     `${alertHeader}\n\n` +
+      ref +
       `Product: ${productName}\n` +
       `Customer: ${customerName}\n` +
-      `Mobile: ${customerMobile}\n\n` +
-      `View request: ${ADMIN_BASE_URL}/dashboard/adminQuoteRequests`,
-    `Quote request from ${customerName} (${customerMobile}) for "${productName}"`
+      `Mobile: ${customerMobile}\n` +
+      via +
+      `\nView request: ${ADMIN_BASE_URL}/dashboard/adminQuoteRequests`,
+    `Quote request ${quoteId || ""} from ${customerName} (${customerMobile}) for "${productName}"${channel === "whatsapp" ? " via WhatsApp" : ""}`
   );
 };
 

@@ -187,7 +187,7 @@ a code nobody can receive.
 
 ### Authorisation
 
-Server-side only, via `requireAdmin`. Of 74 routes: **29 admin, 29 authenticated
+Server-side only, via `requireAdmin`. Of 75 routes: **30 admin, 29 authenticated
 self-scoped, 1 optional-auth, 15 public**. No admin action relies on a hidden
 client button. Client-side `role` checks are UI gates, never authorisation.
 

@@ -3,6 +3,7 @@ import { useApp, mocks } from "../helpers/app.js";
 import { makeCustomer, makeAdmin, insertOrder, seedCatalog, daysAgo } from "../helpers/factories.js";
 import { Review } from "../../server/models/Review.js";
 import { QuoteRequest } from "../../server/models/QuoteRequest.js";
+import { Product } from "../../server/models/Product.js";
 import { ContactMessage } from "../../server/models/ContactMessage.js";
 import { NewsletterSubscriber } from "../../server/models/NewsletterSubscriber.js";
 import { ProductView } from "../../server/models/ProductView.js";
@@ -74,6 +75,7 @@ describe("quotes", () => {
   const body = { productId: "diamond-set", productName: "Diamond Set", customerName: "Asha", customerMobile: "9876543210", isQuoteOnly: true };
 
   it("customer submits → 201, owner alerted; admin lists and updates status", async () => {
+    await seedCatalog(); // enquiries are about catalogue pieces only
     const c = await makeCustomer();
     const admin = await makeAdmin();
     const res = await ctx.api(c.token).post("/api/quotes").send(body);
@@ -88,6 +90,7 @@ describe("quotes", () => {
 
   it("alert failure does not fail the request", async () => {
     mocks().whatsapp.sendWhatsAppAlert.mockRejectedValueOnce(new Error("down"));
+    await seedCatalog(); // enquiries are about catalogue pieces only
     const c = await makeCustomer();
     expect((await ctx.api(c.token).post("/api/quotes").send(body)).status).toBe(201);
   });
@@ -113,6 +116,106 @@ describe("quotes", () => {
   it("empty DB → empty list", async () => {
     const admin = await makeAdmin();
     expect((await ctx.api(admin.token).get("/api/quotes")).body).toEqual({ success: true, data: [] });
+  });
+
+  it("name, picture and quote-only come from the catalogue; anything the browser sends for them is ignored", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const res = await ctx.api(c.token).post("/api/quotes").send({
+      productId: "gold-ring",
+      productName: "Free Diamond Necklace",
+      productImage: "https://evil.example/x.png",
+      isQuoteOnly: true,
+      customerName: "Asha",
+      customerMobile: "9876543210",
+    });
+    expect(res.status).toBe(201);
+    const saved = await QuoteRequest.findById(res.body.data._id).lean();
+    const ring = await Product.findOne({ productId: "gold-ring" }).lean();
+    expect(saved).toMatchObject({ productId: "gold-ring", productName: ring.name, isQuoteOnly: false });
+    expect(saved.productImage).not.toBe("https://evil.example/x.png");
+    expect(saved.productImage).toBe(ring.img || ring.images?.[0] || ring.image);
+    expect(mocks().whatsapp.sendWhatsAppAlert).toHaveBeenCalledWith(expect.objectContaining({ productName: ring.name, isQuoteOnly: false }));
+  });
+
+  it("a piece can be named by its Mongo id; it is stored under its catalogue key", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const set = await Product.findOne({ productId: "diamond-set" }).lean();
+    const res = await ctx.api(c.token).post("/api/quotes").send({ ...body, productId: String(set._id) });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ productId: "diamond-set", productName: set.name, isQuoteOnly: true });
+  });
+
+  it.each([["no-such-piece"], ["0123456789abcdef01234567"]])("unknown productId %s → 404, nothing stored, no alert", async (productId) => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const res = await ctx.api(c.token).post("/api/quotes").send({ ...body, productId });
+    expect(res.status).toBe(404);
+    expect(await QuoteRequest.countDocuments()).toBe(0);
+    expect(mocks().whatsapp.sendWhatsAppAlert).not.toHaveBeenCalled();
+  });
+
+  it("a piece the owner switched off → 404", async () => {
+    await seedCatalog();
+    await Product.updateOne({ productId: "diamond-set" }, { isActive: false });
+    const c = await makeCustomer();
+    expect((await ctx.api(c.token).post("/api/quotes").send(body)).status).toBe(404);
+  });
+
+  it("the signed-in customer is recorded on every enquiry", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const res = await ctx.api(c.token).post("/api/quotes").send({ ...body, userId: "someone-else" });
+    expect((await QuoteRequest.findById(res.body.data._id).lean()).userId).toBe(String(c.user._id));
+  });
+
+  it("each enquiry gets an SRQ-YYYYMMDD-NNNN reference, in sequence", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const a = (await ctx.api(c.token).post("/api/quotes").send(body)).body.data.quoteId;
+    const b = (await ctx.api(c.token).post("/api/quotes").send(body)).body.data.quoteId;
+    expect(a).toMatch(/^SRQ-\d{8}-\d{4}$/);
+    expect(Number(b.slice(-4))).toBe(Number(a.slice(-4)) + 1);
+    expect(b.slice(0, 12)).toBe(a.slice(0, 12));
+    expect(mocks().whatsapp.sendWhatsAppAlert).toHaveBeenLastCalledWith(expect.objectContaining({ quoteId: b }));
+  });
+
+  it("channel: form by default, whatsapp when sent, anything else → 400", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    expect((await ctx.api(c.token).post("/api/quotes").send(body)).body.data.channel).toBe("form");
+    expect((await ctx.api(c.token).post("/api/quotes").send({ ...body, channel: "whatsapp" })).body.data.channel).toBe("whatsapp");
+    expect((await ctx.api(c.token).post("/api/quotes").send({ ...body, channel: "sms" })).status).toBe(400);
+  });
+
+  it("the mobile is stored as +91XXXXXXXXXX; a number that isn't an Indian mobile → 400", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const res = await ctx.api(c.token).post("/api/quotes").send({ ...body, customerMobile: "098765 43210" });
+    expect(res.body.data.customerMobile).toBe("+919876543210");
+    for (const bad of ["5123456789", "+14155550123", "98765432101"]) {
+      expect((await ctx.api(c.token).post("/api/quotes").send({ ...body, customerMobile: bad })).status, bad).toBe(400);
+    }
+    expect(await QuoteRequest.countDocuments()).toBe(1);
+  });
+
+  it("customer name is trimmed and required", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    expect((await ctx.api(c.token).post("/api/quotes").send({ ...body, customerName: "   " })).status).toBe(400);
+    expect((await ctx.api(c.token).post("/api/quotes").send({ ...body, customerName: "  Asha  " })).body.data.customerName).toBe("Asha");
+  });
+
+  it("GET /api/quotes/summary counts pending enquiries (admin only)", async () => {
+    await seedCatalog();
+    const c = await makeCustomer();
+    const admin = await makeAdmin();
+    const first = (await ctx.api(c.token).post("/api/quotes").send(body)).body.data;
+    await ctx.api(c.token).post("/api/quotes").send(body);
+    await ctx.api(admin.token).patch(`/api/quotes/${first._id}/status`).send({ status: "Contacted" });
+    expect((await ctx.api(admin.token).get("/api/quotes/summary")).body).toEqual({ success: true, data: { pending: 1 } });
+    expect((await ctx.api(c.token).get("/api/quotes/summary")).status).toBe(403);
   });
 });
 

@@ -17,15 +17,29 @@ const shopDay = (now) =>
     .format(now)
     .replace(/-/g, "");
 
-export const nextOrderId = async (now = new Date()) => {
+/** `<PREFIX>-<shop day>-<NNNN>` from the shared atomic counter, per kind per day. */
+const nextDailyNumber = async (prefix, kind, now) => {
   const day = shopDay(now);
   const { seq } = await Counter.findOneAndUpdate(
-    { _id: `order:${day}` },
+    { _id: `${kind}:${day}` },
     { $inc: { seq: 1 } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   ).lean();
-  return `SRJ-${day}-${String(seq).padStart(4, "0")}`;
+  return `${prefix}-${day}-${String(seq).padStart(4, "0")}`;
 };
+
+export const nextOrderId = (now = new Date()) => nextDailyNumber("SRJ", "order", now);
+
+/**
+ * Enquiry references, the same shape: SRQ-20261010-0003. Short enough to
+ * read out, and carried in the customer's WhatsApp message so the owner can
+ * match a chat to its record in admin. Counted separately from orders.
+ */
+export const QUOTE_ID_PATTERN = /^SRQ-\d{8}-\d{4,}$/;
+export const nextQuoteId = (now = new Date()) => nextDailyNumber("SRQ", "quote", now);
+
+/** Mongo's duplicate-key error on QuoteRequest.quoteId. */
+export const isQuoteIdClash = (error) => error?.code === 11000 && Boolean(error?.keyPattern?.quoteId);
 
 /** Mongo's duplicate-key error on Order.orderId. */
 export const isOrderIdClash = (error) => error?.code === 11000 && Boolean(error?.keyPattern?.orderId);

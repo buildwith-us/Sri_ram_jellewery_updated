@@ -87,7 +87,9 @@ describe("schemas", () => {
     expect(q(null).data.isQuoteOnly).toBeNull();
     for (const v of ["maybe", 2, {}]) expect(q(v).success, JSON.stringify(v)).toBe(false);
     expect(parse(S.createOrderSchema, { items: [{ productId: "p" }], buyNow: "false" }).data.buyNow).toBe(false);
-    expect(parse(S.quoteRequestSchema, { productId: "p", customerName: "a", customerMobile: "9876543210", isQuoteOnly: "false" }).data.isQuoteOnly).toBe(false);
+    // An enquiry's isQuoteOnly comes from the catalogue, not the request: the
+    // quote schema strips it whatever its spelling.
+    expect(parse(S.quoteRequestSchema, { productId: "p", customerName: "a", customerMobile: "9876543210", isQuoteOnly: "false" }).data.isQuoteOnly).toBeUndefined();
   });
 
   it("product: weight, price and stock cannot be negative; stock is whole (B4)", () => {

@@ -88,6 +88,7 @@ export const ROUTES = {
     ["get", "/api/admin/cloudinary-signature"],
     ["patch", "/api/rates"],
     ["get", "/api/quotes"],
+    ["get", "/api/quotes/summary"],
     ["patch", `/api/quotes/${ID}/status`],
     ["get", "/api/contact"],
     ["get", "/api/newsletter"],
@@ -111,8 +112,8 @@ export const ROUTES = {
 const protectedRoutes = [...ROUTES.user, ...ROUTES.admin];
 
 describe("route inventory", () => {
-  it("matches the documented split: 29 admin, 29 self-scoped", () => {
-    expect(ROUTES.admin).toHaveLength(29);
+  it("matches the documented split: 30 admin, 29 self-scoped", () => {
+    expect(ROUTES.admin).toHaveLength(30);
     expect(ROUTES.user).toHaveLength(29);
   });
 });
