@@ -34,6 +34,8 @@ const WEB_PORT = Number(process.env.E2E_WEB_PORT || 5476);
 const WEB = `http://localhost:${WEB_PORT}`;
 const API = `http://127.0.0.1:${API_PORT}/api`;
 const ADMIN_EMAIL = "admin@buildwithus";
+const WA_NUMBER = "919000012345";
+const WA_GREETING = "Hi, I'd like to know more about your jewellery.";
 const ADMIN_PASSWORD = "E2e-Admin-Pass!2026";
 const HEADED = Boolean(process.env.E2E_HEADED);
 
@@ -920,6 +922,101 @@ const runRegistrationFlow = async (browser, viewport, seeded) => {
   return context;
 };
 
+/**
+ * The floating WhatsApp chat link: on customer pages, labelled, keyboard
+ * reachable, inside the screen, and out of the way of every overlay.
+ */
+const runWhatsAppChatFlow = async (browser, viewport, seeded) => {
+  const context = await newContext(browser, viewport);
+  const page = await context.newPage();
+  const chat = () => page.locator('[data-testid="whatsapp-chat"]');
+  const hidden = async (what) => {
+    for (let i = 0; i < 20; i++) {
+      if ((await chat().count()) === 0) return;
+      await page.waitForTimeout(100);
+    }
+    throw new Error(`the WhatsApp button stayed on screen over ${what}`);
+  };
+  const shown = async (what) => {
+    await chat().waitFor({ timeout: 5_000 }).catch(() => {
+      throw new Error(`the WhatsApp button did not come back after ${what}`);
+    });
+  };
+  const insideViewport = async () => {
+    const box = await chat().boundingBox();
+    const vp = page.viewportSize();
+    expectTrue(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= vp.width && box.y + box.height <= vp.height, `button outside the screen: ${JSON.stringify(box)}`);
+    expectTrue(box.height >= 44, `button is ${box.height}px tall`);
+    return box;
+  };
+
+  await flow(viewport, "WhatsApp chat link", page, [
+    ["Shown with a text label; opens the shop's chat with the greeting", async () => {
+      await goto(page, "/");
+      await chat().waitFor({ timeout: 10_000 });
+      const href = await chat().getAttribute("href");
+      expectTrue(href === `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(WA_GREETING)}`, `href ${href}`);
+      expectTrue((await chat().getAttribute("target")) === "_blank", "does not open in a new tab");
+      const text = (await chat().innerText()).trim();
+      expectTrue(/whatsapp/i.test(text), `visible text "${text}"`);
+      expectTrue(/whatsapp/i.test((await chat().getAttribute("aria-label")) || ""), "no accessible name");
+      await insideViewport();
+    }],
+    ["Keyboard reachable with Tab", async () => {
+      await goto(page, "/shop");
+      await chat().waitFor({ timeout: 10_000 });
+      let reached = false;
+      for (let i = 0; i < 250 && !reached; i++) {
+        await page.keyboard.press("Tab");
+        reached = await page.evaluate(() => document.activeElement?.dataset?.testid === "whatsapp-chat");
+      }
+      expectTrue(reached, "Tab never reached the WhatsApp button");
+    }],
+    ["At the bottom of the page it covers nothing in the footer", async () => {
+      await goto(page, "/");
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.waitForTimeout(400);
+      const box = await insideViewport();
+      for (const target of [page.getByPlaceholder("Email Address"), page.getByText(/all rights reserved/i)]) {
+        const t = await target.first().boundingBox();
+        if (!t) continue;
+        const overlap = !(t.x + t.width <= box.x || box.x + box.width <= t.x || t.y + t.height <= box.y || box.y + box.height <= t.y);
+        expectTrue(!overlap, `overlaps ${await target.first().evaluate((e) => e.outerHTML.slice(0, 60))}`);
+      }
+    }],
+    ["Steps aside for the sign-in modal, the quote modal and the cart drawer", async () => {
+      await goto(page, `/products/${seeded.p4._id}/description`);
+      await dismissNudge(page);
+      await shown("load");
+      await page.getByRole("button", { name: /add to bag/i }).click();
+      await page.getByRole("dialog").waitFor({ timeout: 5_000 });
+      await hidden("the sign-in modal");
+      await page.keyboard.press("Escape");
+      await shown("closing the sign-in modal");
+      await page.getByRole("button", { name: /enquire now/i }).click();
+      await hidden("the quote modal");
+      // Clicked through the DOM: with the icon font blocked, the phone-width
+      // product page overflows and the ✕ sits outside the 390px viewport
+      // (a known, separate issue).
+      await page.getByRole("button", { name: /close quote request/i }).dispatchEvent("click");
+      await shown("closing the quote modal");
+      await page.getByRole("button", { name: /^cart/i }).first().click();
+      await hidden("the cart drawer");
+    }],
+    ...(viewport === "mobile"
+      ? [["Steps aside for the phone menu", async () => {
+          await goto(page, "/");
+          await shown("load");
+          await page.getByRole("button", { name: /open menu/i }).click();
+          await hidden("the open menu");
+          await page.getByRole("button", { name: /close menu/i }).click();
+          await shown("closing the menu");
+        }]]
+      : []),
+  ]);
+  return context;
+};
+
 const runAdminFlows = async (browser, viewport, shared) => {
   const context = await newContext(browser, viewport);
   const page = await context.newPage();
@@ -1038,6 +1135,8 @@ const runAdminFlows = async (browser, viewport, shared) => {
       const caller = rows.find((r) => r.phone && r.orderCount > 0) || rows.find((r) => r.phone);
       expectTrue(top && top.totalSpent > 0 && caller, `no customer with spend/phone to check: ${JSON.stringify(rows.map((r) => [r.name, r.orderCount, r.totalSpent]))}`);
       await goto(page, "/dashboard/adminUsers");
+      await page.getByRole("searchbox", { name: /search users/i }).waitFor({ timeout: 10_000 });
+      expectTrue((await page.locator('[data-testid="whatsapp-chat"]').count()) === 0, "WhatsApp button shown on the admin dashboard");
       const national = caller.phone.replace("+91", "");
       await page.getByRole("searchbox", { name: /search users/i }).fill(`${national.slice(0, 5)} ${national.slice(5)}`);
       const call = page.locator(`a[href="tel:${caller.phone}"]:visible`);
@@ -1126,7 +1225,14 @@ const main = async () => {
 
     start("vite", process.execPath, [path.join(ROOT, "node_modules/vite/bin/vite.js"), "--port", String(WEB_PORT), "--strictPort"], {
       cwd: ROOT,
-      env: { ...process.env, VITE_API_PROXY_TARGET: `http://127.0.0.1:${API_PORT}`, BROWSER: "none" },
+      env: {
+        ...process.env,
+        VITE_API_PROXY_TARGET: `http://127.0.0.1:${API_PORT}`,
+        BROWSER: "none",
+        // A fixed test number, never the developer's .env value.
+        VITE_WHATSAPP_NUMBER: WA_NUMBER,
+        VITE_WHATSAPP_GREETING: WA_GREETING,
+      },
     });
     await waitFor(WEB, "Vite");
 
@@ -1143,6 +1249,7 @@ const main = async () => {
       ctxs.push(await runCustomerFlows(browser, viewport, seeded, shared));
       ctxs.push(await runTimedPromptFlow(browser, viewport, seeded));
       ctxs.push(await runRegistrationFlow(browser, viewport, seeded));
+      ctxs.push(await runWhatsAppChatFlow(browser, viewport, seeded));
       ctxs.push(await runAdminFlows(browser, viewport, shared));
       ctxs.push(await runLegalPages(browser, viewport));
       for (const c of ctxs) await c.close();

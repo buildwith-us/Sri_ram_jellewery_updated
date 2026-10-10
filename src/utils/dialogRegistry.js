@@ -1,4 +1,4 @@
-import { useEffect, useId } from "react";
+import { useEffect, useId, useSyncExternalStore } from "react";
 import Swal from "sweetalert2";
 
 /**
@@ -14,11 +14,17 @@ import Swal from "sweetalert2";
  */
 
 const open = new Set();
+const listeners = new Set();
+const notify = () => listeners.forEach((fn) => fn());
 
 /** Mark a dialog open; returns the function that marks it closed. */
 export const registerDialog = (id) => {
   open.add(id);
-  return () => open.delete(id);
+  notify();
+  return () => {
+    open.delete(id);
+    notify();
+  };
 };
 
 /** True while any registered dialog, or a SweetAlert2 popup, is open. */
@@ -44,3 +50,15 @@ export const useRegisterDialog = (name, isOpen) => {
   }, [id, isOpen]);
   return id;
 };
+
+const subscribe = (fn) => {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+};
+
+/**
+ * Re-renders whenever a registered dialog opens or closes — for things that
+ * must step aside while one is open (the floating WhatsApp button).
+ * SweetAlert2 popups are not evented; they cover the page anyway.
+ */
+export const useAnyDialogOpen = () => useSyncExternalStore(subscribe, () => open.size > 0, () => false);

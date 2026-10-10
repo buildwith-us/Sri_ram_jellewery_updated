@@ -1,6 +1,7 @@
 import React from "react";
 import { Outlet } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
+import WhatsAppButton from "../components/WhatsAppButton/WhatsAppButton";
 import { LoginGateProvider } from "../context/LoginGateContext";
 import useResumePendingAction from "../hooks/useResumePendingAction";
 
@@ -26,6 +27,7 @@ const AppShell = () => (
   <LoginGateProvider>
     <ResumePendingAction />
     <Outlet />
+    <WhatsAppButton />
     <Toaster
       position="top-center"
       toastOptions={{

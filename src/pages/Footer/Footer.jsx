@@ -24,7 +24,11 @@ const Footer = () => {
   };
 
   return (
-    <footer className="w-full bg-surface-container-low border-t border-primary/10 py-section-gap-sm">
+    <footer
+      // Extra room at the bottom, so the floating WhatsApp button never sits
+      // over the last row (the copyright line, the newsletter's send button).
+      className="w-full bg-surface-container-low border-t border-primary/10 pt-section-gap-sm pb-24"
+    >
       <div className="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-16 mb-20">
           {/* Brand Info */}

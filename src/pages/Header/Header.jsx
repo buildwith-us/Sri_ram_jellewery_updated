@@ -4,6 +4,7 @@ import useAuthContext from '../../hooks/useAuthContext';
 import useCart from '../../hooks/useCart';
 import RightSideDrawer from '../../components/RightSideDrawer/RightSideDrawer';
 import useAxiosSecure from '../../hooks/useAxiosSecure';
+import { useRegisterDialog } from '../../utils/dialogRegistry';
 
 const Header = () => {
   const location = useLocation();
@@ -12,6 +13,9 @@ const Header = () => {
   const [axiosSecure] = useAxiosSecure();
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Registered so overlays that must step aside (the floating WhatsApp
+  // button, the timed sign-in prompt) know the menu is covering the page.
+  useRegisterDialog('mobile-menu', mobileMenuOpen);
   const [showCartDrawer, setShowCartDrawer] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   
